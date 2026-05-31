@@ -187,6 +187,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 //   ⌃⌥N       add screen            ⌃⌥X       remove selected screen
 //   ⌃⌥P       pin frontmost app     ⌃⌥O       revert slot to a screen
 //   ⌃⌥Y/G     toggle yaw / pitch tracking
+//   ⌃⌥Q       QUIT (emergency — works even with no focus / lost cursor)
 - (BOOL)handleKeyChars:(NSString*)charsRaw modifiers:(NSEventModifierFlags)mods {
     NSString* chars = [charsRaw lowercaseString];
     bool ctrl = (mods & NSEventModifierFlagControl) != 0;
@@ -194,6 +195,14 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     if (!(ctrl && opt)) return NO;       // only ⌃⌥ chords are ours
     if (chars.length == 0) return NO;
     unichar key = [chars characterAtIndex:0];
+
+    // Emergency global quit — works even when the app has no focus and the
+    // cursor has wandered onto an off-screen virtual display. Always first.
+    if (key == 'q') {
+        std::fprintf(stderr, "\n[quit ⌃⌥Q]\n");
+        [NSApp terminate:self];
+        return YES;
+    }
 
     rns::Config& cfg = rns::config();
     if (cfg.screens.empty()) return NO;
