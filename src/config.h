@@ -51,6 +51,9 @@ struct Config {
     bool yawEnabled   = true;
     bool pitchEnabled = true;
 
+    // Which slot the control hotkeys act on (index into screens).
+    int selectedSlot = 0;
+
     float fovDiagonalDeg = 46.f;
 
     // Three slots in front of the user, each a REAL virtual monitor you can

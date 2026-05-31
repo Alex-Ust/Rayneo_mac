@@ -24,6 +24,7 @@ struct Uniforms {
 
 struct PerQuad {
     float4x4 model;
+    float    selected;  // 1.0 => draw a highlight border
 };
 
 struct VSIn {
@@ -34,6 +35,7 @@ struct VSIn {
 struct VSOut {
     float4 position [[position]];
     float2 uv;
+    float  selected;
 };
 
 vertex VSOut vs_main(VSIn in [[stage_in]],
@@ -43,13 +45,21 @@ vertex VSOut vs_main(VSIn in [[stage_in]],
     float4 world = q.model * float4(in.pos, 0.0, 1.0);
     o.position   = u.viewProj * world;
     o.uv         = in.uv;
+    o.selected   = q.selected;
     return o;
 }
 
 fragment float4 fs_main(VSOut in [[stage_in]],
                         texture2d<float> tex [[texture(0)]],
                         sampler samp         [[sampler(0)]]) {
-    return tex.sample(samp, in.uv);
+    float4 c = tex.sample(samp, in.uv);
+    if (in.selected > 0.5) {
+        // Cyan border on the selected screen so you know what the hotkeys move.
+        float2 d = min(in.uv, 1.0 - in.uv);
+        float edge = min(d.x, d.y);
+        if (edge < 0.02) return float4(0.0, 1.0, 1.0, 1.0);
+    }
+    return c;
 }
 )MSL";
 
@@ -61,6 +71,8 @@ struct Uniforms {
 };
 struct PerQuad {
     simd_float4x4 model;
+    float         selected;
+    float         _pad[3];   // keep 16-byte alignment for the constant buffer
 };
 
 static simd_float4x4 mat4ToSimd(const rns::Mat4& m) {
@@ -305,7 +317,9 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
         if (!s.visible) continue;   // hidden slot (toggled with 1/2/3)
         rns::Mat4 model = rns::quadModelMatrix(
             s.azimuthDeg, s.elevationDeg, s.distanceM, s.widthM, s.heightM);
-        PerQuad pq{ mat4ToSimd(model) };
+        PerQuad pq{};
+        pq.model = mat4ToSimd(model);
+        pq.selected = ((int)i == cfg.selectedSlot) ? 1.0f : 0.0f;
         [enc setVertexBytes:&pq length:sizeof(pq) atIndex:2];
         id<MTLTexture> tex = nil;
         // Prefer a live capture texture for this quad if one is wired up.

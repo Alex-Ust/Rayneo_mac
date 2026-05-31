@@ -9,6 +9,7 @@
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
+#import <ApplicationServices/ApplicationServices.h>  // AXIsProcessTrustedWithOptions
 
 #include <cstdio>
 
@@ -40,6 +41,9 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 @property (nonatomic, assign) rns::ImuService* imu; // unowned
 @property (nonatomic, assign) uint32_t glassesDisplayID;
 @property (nonatomic, strong) id keyMonitor;
+@property (nonatomic, strong) id globalKeyMonitor;
+- (void)setupHotkeys;
+- (BOOL)handleKeyChars:(NSString*)charsRaw modifiers:(NSEventModifierFlags)mods;
 - (void)screenParamsChanged:(NSNotification*)note;
 - (void)logSurfaceGeometry:(NSString*)tag;
 - (void)refitToGlassesScreen;
@@ -158,77 +162,111 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 
-    // Global-ish key handler. Local monitor sees keys when our app is key.
+    [self setupHotkeys];
+}
+
+// Control scheme — all chords use ⌃⌥ (Control+Option) so they don't collide
+// with normal typing in the app you're actually working in. Returns YES if
+// the key was handled (so the local monitor can swallow it).
+//
+//   ⌃⌥1/2/3   select slot          ⌃⌥A/D  move selected left / right (azimuth)
+//   ⌃⌥W/S     move up / down (elev) ⌃⌥-/=  move nearer / farther (distance)
+//   ⌃⌥R       recenter (bring screens to where you're looking)
+//   ⌃⌥V       hide / show selected  ⌃⌥[ ⌃⌥]  cycle selection prev / next
+//   ⌃⌥Y/P     toggle yaw / pitch tracking
+- (BOOL)handleKeyChars:(NSString*)charsRaw modifiers:(NSEventModifierFlags)mods {
+    NSString* chars = [charsRaw lowercaseString];
+    bool ctrl = (mods & NSEventModifierFlagControl) != 0;
+    bool opt  = (mods & NSEventModifierFlagOption)  != 0;
+    if (!(ctrl && opt)) return NO;       // only ⌃⌥ chords are ours
+    if (chars.length == 0) return NO;
+    unichar key = [chars characterAtIndex:0];
+
+    rns::Config& cfg = rns::config();
+    if (cfg.screens.empty()) return NO;
+    int sel = cfg.selectedSlot;
+    if (sel < 0 || sel >= (int)cfg.screens.size()) { sel = 0; cfg.selectedSlot = 0; }
+    auto& cur = cfg.screens[sel];
+
+    if (key == 'r') {
+        if (self.imu) self.imu->recenter();
+        std::fprintf(stderr, "\n[recentered]\n");
+    } else if (key >= '1' && key <= '9') {
+        int idx = key - '1';
+        if (idx < (int)cfg.screens.size()) {
+            cfg.selectedSlot = idx;
+            std::fprintf(stderr, "\n[selected slot %d]\n", idx + 1);
+        }
+    } else if (key == '[' || key == ']') {
+        int n = (int)cfg.screens.size();
+        cfg.selectedSlot = (sel + (key == ']' ? 1 : n - 1)) % n;
+        std::fprintf(stderr, "\n[selected slot %d]\n", cfg.selectedSlot + 1);
+    } else if (key == 'a') {
+        cur.azimuthDeg -= 3.0f;
+        std::fprintf(stderr, "\n[slot %d azimuth %.0f°]\n", sel+1, cur.azimuthDeg);
+    } else if (key == 'd') {
+        cur.azimuthDeg += 3.0f;
+        std::fprintf(stderr, "\n[slot %d azimuth %.0f°]\n", sel+1, cur.azimuthDeg);
+    } else if (key == 'w') {
+        cur.elevationDeg += 3.0f;
+        std::fprintf(stderr, "\n[slot %d elevation %.0f°]\n", sel+1, cur.elevationDeg);
+    } else if (key == 's') {
+        cur.elevationDeg -= 3.0f;
+        std::fprintf(stderr, "\n[slot %d elevation %.0f°]\n", sel+1, cur.elevationDeg);
+    } else if (key == '-') {
+        cur.distanceM = std::max(0.3f, cur.distanceM - 0.1f);
+        std::fprintf(stderr, "\n[slot %d distance %.2fm]\n", sel+1, cur.distanceM);
+    } else if (key == '=' || key == '+') {
+        cur.distanceM += 0.1f;
+        std::fprintf(stderr, "\n[slot %d distance %.2fm]\n", sel+1, cur.distanceM);
+    } else if (key == 'v') {
+        cur.visible = !cur.visible;
+        std::fprintf(stderr, "\n[slot %d %s]\n", sel+1, cur.visible ? "shown" : "hidden");
+    } else if (key == 'y') {
+        cfg.yawEnabled = !cfg.yawEnabled;
+        std::fprintf(stderr, "\n[yaw tracking %s]\n", cfg.yawEnabled ? "on" : "off");
+    } else if (key == 'p') {
+        cfg.pitchEnabled = !cfg.pitchEnabled;
+        std::fprintf(stderr, "\n[pitch tracking %s]\n", cfg.pitchEnabled ? "on" : "off");
+    } else {
+        return NO;
+    }
+    return YES;
+}
+
+- (void)setupHotkeys {
+    // Global hotkeys need Accessibility (Input Monitoring) trust. Prompt once.
+    NSDictionary* opts = @{ (__bridge id)kAXTrustedCheckOptionPrompt: @YES };
+    bool trusted = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+    if (!trusted) {
+        std::fprintf(stderr,
+            "\nGlobal hotkeys need Accessibility access. Grant RayNeoSpatial in\n"
+            "System Settings > Privacy & Security > Accessibility, then relaunch.\n"
+            "Until then, hotkeys only work while this app is focused.\n\n");
+    }
+
     __weak RNSAppDelegate* weakSelf = self;
+    // Local monitor: fires when our app is key; lets us swallow the event.
     self.keyMonitor = [NSEvent
         addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                      handler:^NSEvent* (NSEvent* evt) {
-        NSString* chars = [[evt charactersIgnoringModifiers] lowercaseString];
-        NSEventModifierFlags mods = [evt modifierFlags];
-        bool cmd     = (mods & NSEventModifierFlagCommand) != 0;
-        bool ctrl    = (mods & NSEventModifierFlagControl) != 0;
-        bool opt     = (mods & NSEventModifierFlagOption) != 0;
-        bool ctrlOpt = ctrl && opt;
-        unichar key = [chars length] > 0 ? [chars characterAtIndex:0] : 0;
-
-        if ((cmd && key == 'q') || key == 27 /*Esc*/) {
+        // ⌘Q / Esc quit (only meaningful when focused).
+        NSString* c = [[evt charactersIgnoringModifiers] lowercaseString];
+        if (((evt.modifierFlags & NSEventModifierFlagCommand) && [c isEqualToString:@"q"])
+            || (c.length && [c characterAtIndex:0] == 27)) {
             [NSApp terminate:weakSelf];
             return nil;
         }
-        // Recenter: ⌃⌥R or plain r.
-        if ((ctrlOpt && key == 'r') || (!cmd && !ctrl && !opt && key == 'r')) {
-            if (weakSelf.imu) weakSelf.imu->recenter();
-            std::fprintf(stderr, "\n[recentered]\n");
-            return nil;
-        }
-        // M3 hotkeys (⌃⌥+key, plus a no-modifier shortcut for the glasses'
-        // limited HID where modifier keys may not pass through).
-        rns::Config& cfg = rns::config();
-        auto bumpSpread = [&](float delta){
-            for (auto& s : cfg.screens) {
-                // Scale spread uniformly: positive azimuths grow positive,
-                // negative grow negative. Zero stays zero (the center quad).
-                if (s.azimuthDeg > 0) s.azimuthDeg += delta;
-                else if (s.azimuthDeg < 0) s.azimuthDeg -= delta;
-            }
-            std::fprintf(stderr, "\n[spread %+.0f° → ", delta);
-            for (auto& s : cfg.screens) std::fprintf(stderr, "%.0f ", s.azimuthDeg);
-            std::fprintf(stderr, "]\n");
-        };
-        auto bumpDistance = [&](float delta){
-            for (auto& s : cfg.screens) {
-                s.distanceM = std::max(0.3f, s.distanceM + delta);
-            }
-            std::fprintf(stderr, "\n[distance %+.2fm → %.2fm]\n",
-                         delta, cfg.screens[0].distanceM);
-        };
-        bool consume = true;
-        if      ((ctrlOpt || (!cmd && !ctrl && !opt)) && key == '[') bumpSpread(-5.0f);
-        else if ((ctrlOpt || (!cmd && !ctrl && !opt)) && key == ']') bumpSpread(+5.0f);
-        else if ((ctrlOpt || (!cmd && !ctrl && !opt)) && key == '-') bumpDistance(-0.1f);
-        else if ((ctrlOpt || (!cmd && !ctrl && !opt)) && (key == '=' || key == '+')) bumpDistance(+0.1f);
-        else if (ctrlOpt && key == 't') {
-            cfg.yawEnabled = !cfg.yawEnabled;
-            std::fprintf(stderr, "\n[yaw tracking %s]\n",
-                         cfg.yawEnabled ? "on" : "off");
-        }
-        else if (ctrlOpt && key == 'p') {
-            cfg.pitchEnabled = !cfg.pitchEnabled;
-            std::fprintf(stderr, "\n[pitch tracking %s]\n",
-                         cfg.pitchEnabled ? "on" : "off");
-        }
-        // Keys 1/2/3: toggle slot visibility (hide a panel so only 2 or 1 show).
-        else if (key >= '1' && key <= '9') {
-            size_t idx = (size_t)(key - '1');
-            if (idx < cfg.screens.size()) {
-                cfg.screens[idx].visible = !cfg.screens[idx].visible;
-                std::fprintf(stderr, "\n[slot %zu %s]\n",
-                             idx + 1, cfg.screens[idx].visible ? "shown" : "hidden");
-            }
-        }
-        else consume = false;
-        if (consume) return nil;
+        if ([weakSelf handleKeyChars:c modifiers:evt.modifierFlags]) return nil;
         return evt;
+    }];
+    // Global monitor: fires while OTHER apps are focused (observe-only, can't
+    // swallow — fine, our chords are ⌃⌥ so they don't disturb typing).
+    self.globalKeyMonitor = [NSEvent
+        addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                      handler:^(NSEvent* evt) {
+        NSString* c = [[evt charactersIgnoringModifiers] lowercaseString];
+        [weakSelf handleKeyChars:c modifiers:evt.modifierFlags];
     }];
 }
 
@@ -275,6 +313,10 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     if (self.keyMonitor) {
         [NSEvent removeMonitor:self.keyMonitor];
         self.keyMonitor = nil;
+    }
+    if (self.globalKeyMonitor) {
+        [NSEvent removeMonitor:self.globalKeyMonitor];
+        self.globalKeyMonitor = nil;
     }
     rns::Scene sc = self.scene;
     rns::destroyScene(sc);
