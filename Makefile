@@ -45,7 +45,10 @@ LDFLAGS := \
     -framework IOKit \
     -framework Metal \
     -framework MetalKit \
-    -framework QuartzCore
+    -framework QuartzCore \
+    -framework ScreenCaptureKit \
+    -framework CoreMedia \
+    -framework CoreVideo
 
 .PHONY: all build run clean
 all: build

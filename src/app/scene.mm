@@ -2,6 +2,7 @@
 #include "../config.h"
 #include "../render/mat4.h"
 #include "../tracking/quat.h"
+#include "../capture/capture_source.h"
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
@@ -145,6 +146,9 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
 @property (nonatomic, strong) NSMutableArray<id<MTLTexture>>* quadTextures;
 @property (nonatomic, strong) id<MTLSamplerState>        sampler;
 @property (nonatomic, assign) rns::ImuService*           imu; // unowned
+/// Indexed by quad index: optional capture source override. nullptr = use
+/// the procedural texture from _quadTextures at the same index.
+@property (nonatomic, assign) std::vector<rns::CaptureSource*>* captureSources;
 @end
 
 @implementation RNSScene
@@ -155,6 +159,8 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
         view.device = _device;
         _queue  = [_device newCommandQueue];
         _imu    = imu;
+        _captureSources = new std::vector<rns::CaptureSource*>(
+            rns::config().screens.size(), nullptr);
 
         view.colorPixelFormat        = MTLPixelFormatBGRA8Unorm;
         view.depthStencilPixelFormat = MTLPixelFormatDepth32Float;
@@ -168,6 +174,11 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
         [self buildProceduralTextures];
     }
     return self;
+}
+
+- (void)dealloc {
+    delete _captureSources;
+    _captureSources = nullptr;
 }
 
 - (BOOL)buildPipeline {
@@ -295,8 +306,17 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
             s.azimuthDeg, s.elevationDeg, s.distanceM, s.widthM, s.heightM);
         PerQuad pq{ mat4ToSimd(model) };
         [enc setVertexBytes:&pq length:sizeof(pq) atIndex:2];
-        id<MTLTexture> tex = (i < _quadTextures.count) ? _quadTextures[i]
-                                                       : _quadTextures.firstObject;
+        id<MTLTexture> tex = nil;
+        // Prefer a live capture texture for this quad if one is wired up.
+        if (_captureSources && (size_t)i < _captureSources->size()
+            && (*_captureSources)[i]) {
+            void* p = rns::captureLatestTexture(*(*_captureSources)[i]);
+            tex = (__bridge id<MTLTexture>)p;
+        }
+        if (!tex) {
+            tex = (i < _quadTextures.count) ? _quadTextures[i]
+                                            : _quadTextures.firstObject;
+        }
         [enc setFragmentTexture:tex atIndex:0];
         [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                         indexCount:6
@@ -331,6 +351,14 @@ void destroyScene(Scene& s) {
         (void)o;
         s.objc = nullptr;
     }
+}
+
+void sceneSetCaptureSource(Scene s, int quadIndex, CaptureSource* source) {
+    if (!s.objc) return;
+    RNSScene* o = (__bridge RNSScene*)s.objc;
+    if (!o.captureSources) return;
+    if (quadIndex < 0 || (size_t)quadIndex >= o.captureSources->size()) return;
+    (*o.captureSources)[quadIndex] = source;
 }
 
 } // namespace rns

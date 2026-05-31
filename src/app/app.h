@@ -1,6 +1,7 @@
 #pragma once
 #include "../tracking/imu_service.h"
 #include "../display/display_locator.h"
+#include "../capture/capture_source.h"
 
 namespace rns {
 

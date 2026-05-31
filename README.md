@@ -10,9 +10,9 @@ implementation.
 | Milestone | What | Status |
 | --------- | ---- | ------ |
 | M0 | CLI: SDK link, live head orientation print, identify glasses display | ✅ done |
-| M1 | Borderless fullscreen window on the glasses display | ⏳ next |
-| M2 | One captured window → textured quad, head-rotates view | pending |
-| M3 | Three quads, hotkeys, recenter (Phase 1 acceptance) | pending |
+| M1 | Borderless fullscreen Metal window on the glasses display | ✅ done |
+| M2 | ScreenCaptureKit → Metal texture, head-tracked perspective camera | ✅ done (1 of 3 quads live; others procedural) |
+| M3 | Three quads, configurable poses, hotkeys (Phase 1 acceptance) | ⏳ partial (hotkeys done; multi-window capture pending) |
 
 ## Why not Swift / Xcode?
 
@@ -40,10 +40,21 @@ make build       # ./build/RayNeoSpatial + libRayNeoSDK.dylib next to it
 ./build/RayNeoSpatial
 ```
 
-Commands inside the CLI:
-- `r` + Enter — recenter (current pose becomes straight-ahead)
-- `reset` — reset the orientation filter to identity
-- `q` / Ctrl-C — quit
+Hotkeys (window must be focused):
+
+| Action | Keys |
+| --- | --- |
+| Recenter | `R` or `⌃⌥R` |
+| Spread screens further apart | `]` or `⌃⌥]` |
+| Pull screens together | `[` or `⌃⌥[` |
+| Push screens farther | `=` / `+` or `⌃⌥=` |
+| Pull screens nearer | `-` or `⌃⌥-` |
+| Toggle yaw tracking | `⌃⌥T` |
+| Toggle pitch tracking | `⌃⌥P` |
+| Quit | `⌘Q` or `Esc` |
+
+The terminal that launched the app keeps showing a heartbeat with live
+yaw/pitch/roll + IMU rate.
 
 ## Architecture
 
@@ -64,7 +75,12 @@ Commands inside the CLI:
                                        │
                                        ▼          snapshot() under mutex
                                   Render thread
-                                  (future M1+ — Metal/OpenGL on the glasses display)
+                                  (src/app/scene.mm — Metal pipeline; one
+                                   textured quad per configured screen pose)
+                                       ▲
+                                       │
+       ScreenCaptureKit ─ src/capture/capture_source.mm ─┘
+       (CVPixelBuffer → CVMetalTextureCache, zero-copy)
 ```
 
 `src/display/display_locator.mm` enumerates the macOS display tree via
@@ -90,6 +106,20 @@ that differs from the plan's recommendation:
 - **The dylib must be re-signed.** macOS 26 rejects the upstream dylib
   signature; `codesign -s - -f` ad-hoc resigning is mandatory.  The
   Makefile does this automatically.
+
+## First-run permission
+
+On the very first launch macOS will block ScreenCaptureKit and queue a
+prompt. The app keeps running and shows procedural textures on the
+center quad. To switch to the live desktop:
+
+1. Open **System Settings → Privacy & Security → Screen Recording**.
+2. Enable `RayNeoSpatial` (or `RayNeoSpatial` in the toggle list).
+3. Quit and re-launch the app.
+
+The captured source is the **built-in display** (so the user can drag
+windows around on it and see them mirror on the center floating quad);
+multi-window capture lands in the next M3 push.
 
 ## Project layout
 

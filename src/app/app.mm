@@ -1,5 +1,6 @@
 #include "app.h"
 #include "scene.h"
+#include "../config.h"
 #include "../display/display_locator.h"
 #include "../tracking/quat.h"
 #import <Foundation/Foundation.h>
@@ -30,6 +31,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 @interface RNSAppDelegate : NSObject <NSApplicationDelegate>
 @property (nonatomic, strong) NSWindow*  window;
 @property (nonatomic, assign) rns::Scene scene;
+@property (nonatomic, assign) rns::CaptureSource capture;
 @property (nonatomic, assign) rns::ImuService* imu; // unowned
 @property (nonatomic, assign) uint32_t glassesDisplayID;
 @property (nonatomic, strong) id keyMonitor;
@@ -72,6 +74,26 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     rns::Scene sc = rns::makeScene((__bridge void*)mtkv, self.imu);
     self.scene = sc;
 
+    // Try to start screen capture and wire it into quad index 1 (center).
+    // If permission isn't granted yet, the procedural texture stays visible
+    // and the OS will queue a prompt for the next run.
+    if (rns::requestScreenRecordingPermission()) {
+        self.capture = rns::makeBuiltinDisplayCapture(
+            (__bridge void*)mtlDev, 1920, 1080);
+        if (self.capture.objc) {
+            rns::sceneSetCaptureSource(self.scene, /*quadIndex=*/1,
+                                       &self->_capture);
+            std::fprintf(stderr,
+                "Capture started (built-in display -> center quad)\n");
+        }
+    } else {
+        std::fprintf(stderr,
+            "Screen Recording permission not granted yet. Grant it in\n"
+            "System Settings > Privacy & Security > Screen Recording and\n"
+            "relaunch RayNeoSpatial to see the captured desktop on the\n"
+            "center panel. The procedural texture is shown meanwhile.\n");
+    }
+
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 
@@ -82,9 +104,9 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
                                      handler:^NSEvent* (NSEvent* evt) {
         NSString* chars = [[evt charactersIgnoringModifiers] lowercaseString];
         NSEventModifierFlags mods = [evt modifierFlags];
-        bool cmd = (mods & NSEventModifierFlagCommand) != 0;
-        bool ctrl = (mods & NSEventModifierFlagControl) != 0;
-        bool opt = (mods & NSEventModifierFlagOption) != 0;
+        bool cmd     = (mods & NSEventModifierFlagCommand) != 0;
+        bool ctrl    = (mods & NSEventModifierFlagControl) != 0;
+        bool opt     = (mods & NSEventModifierFlagOption) != 0;
         bool ctrlOpt = ctrl && opt;
         unichar key = [chars length] > 0 ? [chars characterAtIndex:0] : 0;
 
@@ -92,19 +114,50 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
             [NSApp terminate:weakSelf];
             return nil;
         }
-        // Ctrl+Opt+R: recenter
-        if (ctrlOpt && key == 'r') {
+        // Recenter: ⌃⌥R or plain r.
+        if ((ctrlOpt && key == 'r') || (!cmd && !ctrl && !opt && key == 'r')) {
             if (weakSelf.imu) weakSelf.imu->recenter();
             std::fprintf(stderr, "\n[recentered]\n");
             return nil;
         }
-        // Plain 'r' also recenters — convenient when no modifier keys are
-        // mapped through the glasses' HID.
-        if (key == 'r') {
-            if (weakSelf.imu) weakSelf.imu->recenter();
-            std::fprintf(stderr, "\n[recentered]\n");
-            return nil;
+        // M3 hotkeys (⌃⌥+key, plus a no-modifier shortcut for the glasses'
+        // limited HID where modifier keys may not pass through).
+        rns::Config& cfg = rns::config();
+        auto bumpSpread = [&](float delta){
+            for (auto& s : cfg.screens) {
+                // Scale spread uniformly: positive azimuths grow positive,
+                // negative grow negative. Zero stays zero (the center quad).
+                if (s.azimuthDeg > 0) s.azimuthDeg += delta;
+                else if (s.azimuthDeg < 0) s.azimuthDeg -= delta;
+            }
+            std::fprintf(stderr, "\n[spread %+.0f° → ", delta);
+            for (auto& s : cfg.screens) std::fprintf(stderr, "%.0f ", s.azimuthDeg);
+            std::fprintf(stderr, "]\n");
+        };
+        auto bumpDistance = [&](float delta){
+            for (auto& s : cfg.screens) {
+                s.distanceM = std::max(0.3f, s.distanceM + delta);
+            }
+            std::fprintf(stderr, "\n[distance %+.2fm → %.2fm]\n",
+                         delta, cfg.screens[0].distanceM);
+        };
+        bool consume = true;
+        if      ((ctrlOpt || (!cmd && !ctrl && !opt)) && key == '[') bumpSpread(-5.0f);
+        else if ((ctrlOpt || (!cmd && !ctrl && !opt)) && key == ']') bumpSpread(+5.0f);
+        else if ((ctrlOpt || (!cmd && !ctrl && !opt)) && key == '-') bumpDistance(-0.1f);
+        else if ((ctrlOpt || (!cmd && !ctrl && !opt)) && (key == '=' || key == '+')) bumpDistance(+0.1f);
+        else if (ctrlOpt && key == 't') {
+            cfg.yawEnabled = !cfg.yawEnabled;
+            std::fprintf(stderr, "\n[yaw tracking %s]\n",
+                         cfg.yawEnabled ? "on" : "off");
         }
+        else if (ctrlOpt && key == 'p') {
+            cfg.pitchEnabled = !cfg.pitchEnabled;
+            std::fprintf(stderr, "\n[pitch tracking %s]\n",
+                         cfg.pitchEnabled ? "on" : "off");
+        }
+        else consume = false;
+        if (consume) return nil;
         return evt;
     }];
 }
@@ -118,6 +171,10 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     rns::Scene sc = self.scene;
     rns::destroyScene(sc);
     self.scene = sc;
+
+    rns::CaptureSource cap = self.capture;
+    rns::destroyCapture(cap);
+    self.capture = cap;
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)app {
