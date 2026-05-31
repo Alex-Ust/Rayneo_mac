@@ -150,6 +150,19 @@
     top.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     top.spacing = 8;
     [self.rootStack addArrangedSubview:top];
+
+    // Save / Reset row — layout is only persisted when you click Save.
+    NSButton* saveBtn = [self button:@"💾 Save layout" block:^(id s){
+        [self.actions saveLayout];
+    }];
+    NSButton* resetBtn = [self button:@"↺ Reset to defaults" block:^(id s){
+        [self.actions resetLayout];
+        [self rebuild];
+    }];
+    NSStackView* top2 = [NSStackView stackViewWithViews:@[saveBtn, resetBtn]];
+    top2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    top2.spacing = 8;
+    [self.rootStack addArrangedSubview:top2];
     [self.rootStack addArrangedSubview:[self separator]];
 
     for (NSInteger i = 0; i < (NSInteger)cfg.screens.size(); ++i) {
@@ -201,19 +214,24 @@
     row2.spacing = 12;
     [self.rootStack addArrangedSubview:row2];
 
-    // Sliders.
+    // Sliders. Each edit also selects this slot so the cyan border in the
+    // glasses shows which screen you're moving.
     [self.rootStack addArrangedSubview:
         [self sliderRow:@"Azimuth" min:-90 max:90 value:s.azimuthDeg format:@"%.0f°"
-                 update:^(double v){ rns::config().screens[i].azimuthDeg = (float)v; }]];
+                 update:^(double v){ rns::config().selectedSlot=(int)i;
+                                     rns::config().screens[i].azimuthDeg = (float)v; }]];
     [self.rootStack addArrangedSubview:
         [self sliderRow:@"Up/Down" min:-45 max:45 value:s.elevationDeg format:@"%.0f°"
-                 update:^(double v){ rns::config().screens[i].elevationDeg = (float)v; }]];
+                 update:^(double v){ rns::config().selectedSlot=(int)i;
+                                     rns::config().screens[i].elevationDeg = (float)v; }]];
     [self.rootStack addArrangedSubview:
         [self sliderRow:@"Distance" min:0.5 max:4.0 value:s.distanceM format:@"%.2fm"
-                 update:^(double v){ rns::config().screens[i].distanceM = (float)v; }]];
+                 update:^(double v){ rns::config().selectedSlot=(int)i;
+                                     rns::config().screens[i].distanceM = (float)v; }]];
     [self.rootStack addArrangedSubview:
         [self sliderRow:@"Size" min:0.5 max:2.5 value:s.widthM format:@"%.2fm"
                  update:^(double v){
+                     rns::config().selectedSlot=(int)i;
                      rns::config().screens[i].widthM = (float)v;
                      rns::config().screens[i].heightM = (float)v * 0.5625f; // 16:9
                  }]];

@@ -56,6 +56,9 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 - (void)removeSelectedScreen;
 - (void)pinFrontmostAppToSelected;
 - (void)revertSelectedToScreen;
+- (void)setupCapturesFromConfig;
+- (void)saveLayout;
+- (void)resetLayout;
 - (void)screenParamsChanged:(NSNotification*)note;
 - (void)logSurfaceGeometry:(NSString*)tag;
 - (void)refitToGlassesScreen;
@@ -115,62 +118,15 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     rns::Scene sc = rns::makeScene((__bridge void*)mtkv, self.imu);
     self.scene = sc;
 
-    // Wire each slot's capture source per its config: an App slot captures
-    // that app's window; a Display slot mirrors the built-in display. One
-    // CaptureSource per slot, kept in self.captures (index-aligned to slots).
     if (rns::requestScreenRecordingPermission()) {
-        const auto& slots = rns::config().screens;
         self.captures = new std::vector<std::unique_ptr<rns::CaptureSource>>();
         self.vdm = new rns::VirtualDisplayManager();
-
-        // Pass 1: create a real virtual monitor for every Display slot. We
-        // record the displayID per slot (0 for App slots).
-        std::vector<uint32_t> slotDisplayID(slots.size(), 0);
-        for (size_t i = 0; i < slots.size(); ++i) {
-            if (slots[i].source != rns::SlotSource::App) {
-                char nm[64];
-                std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", i + 1);
-                slotDisplayID[i] = self.vdm->create(nm, 1920, 1080, 60.0,
-                                                    /*hidpi=*/true);
-            }
-        }
-        // Let the main run loop register the new displays with the window
-        // server before we ask ScreenCaptureKit to enumerate them.
-        if (self.vdm->displays().size() > 0) {
-            [[NSRunLoop currentRunLoop]
-                runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
-        }
-
-        // Pass 2: wire each slot's capture.
-        rns::sceneEnsureSlotCount(self.scene, (int)slots.size());
-        for (size_t i = 0; i < slots.size(); ++i) {
-            rns::CaptureSource cs;
-            if (slots[i].source == rns::SlotSource::App
-                && !slots[i].appName.empty()) {
-                cs = rns::makeAppWindowCapture(
-                    (__bridge void*)mtlDev, slots[i].appName, 1920, 1080);
-            } else if (slotDisplayID[i] != 0) {
-                cs = rns::makeDisplayCapture(
-                    (__bridge void*)mtlDev, slotDisplayID[i], 1920, 1080);
-            }
-            if (!cs.objc) {
-                // Fallback so the slot is never blank (private API missing,
-                // app not running, etc.).
-                cs = rns::makeBuiltinDisplayCapture(
-                    (__bridge void*)mtlDev, 1920, 1080);
-            }
-            self.captures->push_back(std::make_unique<rns::CaptureSource>(cs));
-            if (cs.objc) {
-                rns::sceneSetCaptureSource(self.scene, (int)i,
-                                           self.captures->back().get());
-            }
-        }
+        [self setupCapturesFromConfig];
     } else {
         std::fprintf(stderr,
             "Screen Recording permission not granted yet. Grant it in\n"
             "System Settings > Privacy & Security > Screen Recording and\n"
-            "relaunch RayNeoSpatial to see the captured desktop on the\n"
-            "center panel. The procedural texture is shown meanwhile.\n");
+            "relaunch RayNeoSpatial to see the captured desktop.\n");
     }
 
     [self.window makeKeyAndOrderFront:nil];
@@ -477,6 +433,64 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     std::fprintf(stderr, "\n[slot %d reverted to a virtual screen]\n", sel + 1);
 }
 
+// Build a capture source for every slot per its config (Display slots spawn
+// a virtual monitor; App slots capture the app window). Assumes self.captures
+// is empty and self.vdm has no displays yet.
+- (void)setupCapturesFromConfig {
+    const auto& slots = rns::config().screens;
+    self.captures->clear();
+
+    std::vector<uint32_t> slotDisplayID(slots.size(), 0);
+    for (size_t i = 0; i < slots.size(); ++i) {
+        if (slots[i].source != rns::SlotSource::App) {
+            char nm[64];
+            std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", i + 1);
+            slotDisplayID[i] = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+        }
+    }
+    if (self.vdm->displays().size() > 0) {
+        [[NSRunLoop currentRunLoop]
+            runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
+    }
+
+    rns::sceneEnsureSlotCount(self.scene, (int)slots.size());
+    for (size_t i = 0; i < slots.size(); ++i) {
+        rns::CaptureSource cs;
+        if (slots[i].source == rns::SlotSource::App && !slots[i].appName.empty()) {
+            cs = rns::makeAppWindowCapture(
+                (__bridge void*)self.mtlDevice, slots[i].appName, 1920, 1080);
+        } else if (slotDisplayID[i] != 0) {
+            cs = rns::makeDisplayCapture(
+                (__bridge void*)self.mtlDevice, slotDisplayID[i], 1920, 1080);
+        }
+        if (!cs.objc) {
+            cs = rns::makeBuiltinDisplayCapture(
+                (__bridge void*)self.mtlDevice, 1920, 1080);
+        }
+        self.captures->push_back(std::make_unique<rns::CaptureSource>(cs));
+        if (cs.objc)
+            rns::sceneSetCaptureSource(self.scene, (int)i, self.captures->back().get());
+    }
+}
+
+- (void)saveLayout {
+    rns::ConfigStore::save();
+}
+
+// Reset to the built-in default layout (3 virtual screens) and rebuild
+// captures/displays. Recovers from a bad saved layout (e.g. a black slot).
+- (void)resetLayout {
+    if (!self.captures || !self.vdm) return;
+    for (auto& c : *self.captures) if (c) rns::destroyCapture(*c);
+    self.captures->clear();
+    self.vdm->teardown();
+
+    rns::config().screens = rns::Config{}.screens;  // default 3 screens
+    rns::config().selectedSlot = 0;
+    [self setupCapturesFromConfig];
+    std::fprintf(stderr, "\n[layout reset to defaults]\n");
+}
+
 // --- RNSControlActions (called from the control panel; index-based) --------
 - (void)removeScreenAtIndex:(NSInteger)index {
     rns::config().selectedSlot = (int)index;
@@ -493,8 +507,8 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
 - (void)applicationWillTerminate:(NSNotification*)note {
     (void)note;
-    // Persist the layout the user arranged this session.
-    rns::ConfigStore::save();
+    // NOTE: layout is saved ONLY when the user clicks Save in the panel —
+    // we deliberately do not auto-save on quit.
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (self.keyMonitor) {
         [NSEvent removeMonitor:self.keyMonitor];

@@ -12,5 +12,7 @@
 - (void)pinAppNamed:(NSString*)appName toIndex:(NSInteger)index;
 - (void)revertIndexToScreen:(NSInteger)index;
 - (void)recenter;
+- (void)saveLayout;
+- (void)resetLayout;
 @end
 #endif
