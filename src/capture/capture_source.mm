@@ -15,6 +15,7 @@
 @property (nonatomic, strong) id<MTLDevice> device;
 @property (nonatomic, assign) CVMetalTextureCacheRef cache;
 @property (nonatomic, strong) id<MTLTexture> latest; // atomic via @synchronized
+@property (nonatomic, assign) BOOL gotFirstFrame;
 @end
 
 @implementation RNSCaptureSource
@@ -60,6 +61,10 @@
     id<MTLTexture> tex = CVMetalTextureGetTexture(cvTex);
     @synchronized (self) {
         _latest = tex;
+    }
+    if (!_gotFirstFrame) {
+        _gotFirstFrame = YES;
+        std::fprintf(stderr, "  [capture] first frame %zux%zu\n", w, h);
     }
     // The CVMetalTextureCache keeps the underlying IOSurface alive until the
     // texture is released; we can drop the wrapper here.
@@ -119,11 +124,19 @@
 namespace rns {
 
 bool requestScreenRecordingPermission() {
-    // Triggers the OS prompt on first call. The prompt path differs by macOS
-    // version; CGRequestScreenCaptureAccess returns immediately with the
-    // current state. If false, the app must be relaunched after the user
-    // grants access in System Settings > Privacy & Security > Screen Recording.
-    return CGRequestScreenCaptureAccess() != 0;
+    bool pre = CGPreflightScreenCaptureAccess();
+    bool granted = CGRequestScreenCaptureAccess() != 0;
+    std::fprintf(stderr,
+        "Screen Recording permission: preflight=%s, after-request=%s\n",
+        pre ? "GRANTED" : "DENIED",
+        granted ? "GRANTED" : "DENIED");
+    if (!granted) {
+        std::fprintf(stderr,
+            "  -> Captures will show placeholder colors until you grant it.\n"
+            "  -> System Settings > Privacy & Security > Screen Recording:\n"
+            "     enable 'RayNeoSpatial' (add the .app if missing), then relaunch.\n");
+    }
+    return granted;
 }
 
 // Shared display-capture path used by both the built-in and by-id entrypoints.
