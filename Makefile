@@ -8,6 +8,12 @@ FRAMEWORKS_DIR := Frameworks
 DYLIB          := libRayNeoSDK.dylib
 INCLUDE_DIR    := include
 
+# Code-signing identity. If the stable self-signed cert exists (created by
+# `make signing`), use it so TCC permissions persist across rebuilds;
+# otherwise fall back to ad-hoc (-), which re-prompts every build.
+CERT_NAME := RayNeoSpatial Self-Signed
+SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q "$(CERT_NAME)" && echo "$(CERT_NAME)" || echo -)
+
 # Find C++/Obj-C++ sources.
 CPP_SRCS := $(shell find src -name '*.cpp')
 MM_SRCS  := $(shell find src -name '*.mm')
@@ -52,8 +58,12 @@ LDFLAGS := \
 
 APP_BUNDLE := $(BUILD_DIR)/RayNeoSpatial.app
 
-.PHONY: all build run clean app runapp
+.PHONY: all build run clean app runapp signing
 all: build
+
+# One-time: create the stable self-signed signing identity.
+signing:
+	@bash scripts/setup-signing.sh
 
 build: $(BIN)
 
@@ -64,8 +74,8 @@ $(BIN): $(OBJS) $(FRAMEWORKS_DIR)/$(DYLIB)
 	@# macOS 26 enforces strict dylib signatures even for ad-hoc; strip the
 	@# Chrome download quarantine and re-sign so dyld accepts the lib.
 	@xattr -dr com.apple.quarantine $(BUILD_DIR)/$(DYLIB) 2>/dev/null || true
-	@codesign -s - -f $(BUILD_DIR)/$(DYLIB) >/dev/null
-	@codesign -s - -f $@ >/dev/null
+	@codesign -s "$(SIGN_ID)" -f $(BUILD_DIR)/$(DYLIB) >/dev/null
+	@codesign -s "$(SIGN_ID)" -f $@ >/dev/null
 
 $(BUILD_DIR)/obj/%.cpp.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -93,11 +103,11 @@ app: build
 	@install_name_tool -add_rpath @executable_path/../Frameworks \
 		$(APP_BUNDLE)/Contents/MacOS/RayNeoSpatial 2>/dev/null || true
 	@xattr -dr com.apple.quarantine $(APP_BUNDLE) 2>/dev/null || true
-	@codesign -s - -f $(APP_BUNDLE)/Contents/Frameworks/$(DYLIB) >/dev/null
-	@codesign -s - -f --identifier com.rayneo.spatial \
+	@codesign -s "$(SIGN_ID)" -f $(APP_BUNDLE)/Contents/Frameworks/$(DYLIB) >/dev/null
+	@codesign -s "$(SIGN_ID)" -f --identifier com.rayneo.spatial \
 		$(APP_BUNDLE)/Contents/MacOS/RayNeoSpatial >/dev/null
-	@codesign -s - -f --deep $(APP_BUNDLE) >/dev/null
-	@echo "Built $(APP_BUNDLE)"
+	@codesign -s "$(SIGN_ID)" -f --deep $(APP_BUNDLE) >/dev/null
+	@echo "Built $(APP_BUNDLE)  (signed: $(SIGN_ID))"
 
 # Build the bundle and launch it.
 runapp: app
