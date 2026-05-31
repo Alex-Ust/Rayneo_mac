@@ -125,9 +125,16 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         [self setupCapturesFromConfig];
     } else {
         std::fprintf(stderr,
-            "Screen Recording permission not granted yet. Grant it in\n"
-            "System Settings > Privacy & Security > Screen Recording and\n"
-            "relaunch RayNeoSpatial to see the captured desktop.\n");
+            "Screen Recording permission not granted yet. Opening Settings…\n"
+            "Enable RayNeoSpatial there, then relaunch.\n");
+        // Jump the user straight to the right settings pane.
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:
+            @"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"]];
+        // Still build captures so virtual displays exist; they'll show
+        // placeholder colors until permission is granted + relaunch.
+        self.captures = new std::vector<std::unique_ptr<rns::CaptureSource>>();
+        self.vdm = new rns::VirtualDisplayManager();
+        [self setupCapturesFromConfig];
     }
 
     [self.window makeKeyAndOrderFront:nil];
@@ -143,8 +150,9 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 // with normal typing in the app you're actually working in. Returns YES if
 // the key was handled (so the local monitor can swallow it).
 //
-//   ⌃⌥1/2/3   select slot          ⌃⌥A/D  move selected left / right (azimuth)
-//   ⌃⌥W/S     move up / down (elev) ⌃⌥-/=  move nearer / farther (distance)
+//   ⌃⌥1/2/3   select slot (same again = deselect)   ⌃⌥0  clear selection
+//   ⌃⌥A/D     move left / right     ⌃⌥W/S  move up / down (elev)
+//   ⌃⌥-/=     move nearer / farther
 //   ⌃⌥R       recenter (bring screens to where you're looking)
 //   ⌃⌥V       hide / show selected  ⌃⌥[ ⌃⌥]  cycle selection prev / next
 //   ⌃⌥N       add screen            ⌃⌥X       remove selected screen
@@ -191,11 +199,22 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         return YES;
     }
     // --- selection keys ---
+    if (key == '0') {                 // clear selection
+        cfg.selectedSlot = -1;
+        std::fprintf(stderr, "\n[selection cleared]\n");
+        return YES;
+    }
     if (key >= '1' && key <= '9') {
         int idx = key - '1';
         if (idx < n) {
-            cfg.selectedSlot = idx;
-            std::fprintf(stderr, "\n[selected slot %d]\n", idx + 1);
+            // Pressing the already-selected slot's number deselects it.
+            if (idx == sel) {
+                cfg.selectedSlot = -1;
+                std::fprintf(stderr, "\n[selection cleared]\n");
+            } else {
+                cfg.selectedSlot = idx;
+                std::fprintf(stderr, "\n[selected slot %d]\n", idx + 1);
+            }
         }
         return YES;
     }

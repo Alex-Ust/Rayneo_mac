@@ -146,7 +146,10 @@
     NSButton* recBtn = [self button:@"⌖ Recenter" block:^(id s){
         [self.actions recenter];
     }];
-    NSStackView* top = [NSStackView stackViewWithViews:@[addBtn, recBtn]];
+    NSButton* deselBtn = [self button:@"○ Deselect" block:^(id s){
+        rns::config().selectedSlot = -1;  // clears the cyan border in glasses
+    }];
+    NSStackView* top = [NSStackView stackViewWithViews:@[addBtn, recBtn, deselBtn]];
     top.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     top.spacing = 8;
     [self.rootStack addArrangedSubview:top];
