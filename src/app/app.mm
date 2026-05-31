@@ -5,6 +5,7 @@
 #include "../tracking/quat.h"
 #include "../virtualdisplay/virtual_display_manager.h"
 #include "../capture/capture_source.h"
+#include "../config_store.h"
 #include <vector>
 #include <memory>
 #import <Foundation/Foundation.h>
@@ -467,6 +468,8 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
 - (void)applicationWillTerminate:(NSNotification*)note {
     (void)note;
+    // Persist the layout the user arranged this session.
+    rns::ConfigStore::save();
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (self.keyMonitor) {
         [NSEvent removeMonitor:self.keyMonitor];

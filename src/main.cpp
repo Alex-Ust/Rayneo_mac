@@ -1,4 +1,5 @@
 #include "config.h"
+#include "config_store.h"
 #include "tracking/imu_service.h"
 #include "display/display_locator.h"
 #include "app/app.h"
@@ -53,6 +54,9 @@ void heartbeat(ImuService* imu) {
 
 int main() {
     std::signal(SIGINT, onSigint);
+
+    // Restore the user's saved slot layout (if any) before anything reads it.
+    ConfigStore::load();
 
     unsigned int v = Rayneo_GetApiVersion();
     std::fprintf(stderr,
