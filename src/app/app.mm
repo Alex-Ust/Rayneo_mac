@@ -1,5 +1,5 @@
 #include "app.h"
-#include "renderer.h"
+#include "scene.h"
 #include "../display/display_locator.h"
 #include "../tracking/quat.h"
 #import <Foundation/Foundation.h>
@@ -29,7 +29,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
 @interface RNSAppDelegate : NSObject <NSApplicationDelegate>
 @property (nonatomic, strong) NSWindow*  window;
-@property (nonatomic, assign) rns::Renderer renderer;
+@property (nonatomic, assign) rns::Scene scene;
 @property (nonatomic, assign) rns::ImuService* imu; // unowned
 @property (nonatomic, assign) uint32_t glassesDisplayID;
 @property (nonatomic, strong) id keyMonitor;
@@ -69,8 +69,8 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     mtkv.framebufferOnly = YES;
     [self.window setContentView:mtkv];
 
-    rns::Renderer r = rns::makeRenderer((__bridge void*)mtkv, self.imu);
-    self.renderer = r;
+    rns::Scene sc = rns::makeScene((__bridge void*)mtkv, self.imu);
+    self.scene = sc;
 
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
@@ -115,9 +115,9 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         [NSEvent removeMonitor:self.keyMonitor];
         self.keyMonitor = nil;
     }
-    rns::Renderer r = self.renderer;
-    rns::destroyRenderer(r);
-    self.renderer = r;
+    rns::Scene sc = self.scene;
+    rns::destroyScene(sc);
+    self.scene = sc;
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)app {
