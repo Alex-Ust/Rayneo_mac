@@ -6,6 +6,8 @@
 #include "../virtualdisplay/virtual_display_manager.h"
 #include "../capture/capture_source.h"
 #include "../config_store.h"
+#include "control_panel.h"
+#include "control_actions.h"
 #include <vector>
 #include <memory>
 #import <Foundation/Foundation.h>
@@ -34,10 +36,11 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 // ----------------------------------------------------------------------------
 // AppDelegate. Owns the window/renderer; routes keyDown to imu/quit.
 
-@interface RNSAppDelegate : NSObject <NSApplicationDelegate>
+@interface RNSAppDelegate : NSObject <NSApplicationDelegate, RNSControlActions>
 @property (nonatomic, strong) NSWindow*  window;
 @property (nonatomic, strong) MTKView*   mtkView;
 @property (nonatomic, assign) rns::Scene scene;
+@property (nonatomic, assign) rns::ControlPanel panel;
 // One capture source per slot, index-aligned with cfg.screens. unique_ptr so
 // the pointers handed to the scene stay valid when the vector grows/shrinks.
 @property (nonatomic, assign) std::vector<std::unique_ptr<rns::CaptureSource>>* captures;
@@ -174,6 +177,9 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     [NSApp activateIgnoringOtherApps:YES];
 
     [self setupHotkeys];
+
+    // Control panel on the Mac's main display: edit the layout by hand.
+    self.panel = rns::makeControlPanel((__bridge void*)self);
 }
 
 // Control scheme — all chords use ⌃⌥ (Control+Option) so they don't collide
@@ -403,44 +409,40 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
                  sel + 1, cfg.screens.size());
 }
 
-// Replace the selected slot's content with the window of whatever app is
-// frontmost right now (e.g. you're in Terminal, press ⌃⌥P → Terminal pins
-// to the selected slot).
-- (void)pinFrontmostAppToSelected {
+// Core: make slot `idx` capture the window of the named app.
+- (void)pinAppNamed:(NSString*)appName toIndex:(NSInteger)idx {
     rns::Config& cfg = rns::config();
-    if (!self.captures || cfg.screens.empty()) return;
-    int sel = cfg.selectedSlot;
-    if (sel < 0 || sel >= (int)cfg.screens.size()) return;
-
-    NSRunningApplication* front =
-        [[NSWorkspace sharedWorkspace] frontmostApplication];
-    NSString* appName = front.localizedName;
+    if (!self.captures || idx < 0 || idx >= (NSInteger)cfg.screens.size()) return;
     if (!appName || appName.length == 0
         || [appName isEqualToString:@"RayNeoSpatial"]) {
-        std::fprintf(stderr, "\n[pin: no usable frontmost app]\n");
+        std::fprintf(stderr, "\n[pin: no usable app]\n");
         return;
     }
-
-    cfg.screens[sel].source  = rns::SlotSource::App;
-    cfg.screens[sel].appName = std::string([appName UTF8String]);
+    cfg.screens[idx].source  = rns::SlotSource::App;
+    cfg.screens[idx].appName = std::string([appName UTF8String]);
 
     rns::CaptureSource cs = rns::makeAppWindowCapture(
-        (__bridge void*)self.mtlDevice,
-        cfg.screens[sel].appName, 1920, 1080);
+        (__bridge void*)self.mtlDevice, cfg.screens[idx].appName, 1920, 1080);
     if (!cs.objc) {
         std::fprintf(stderr, "\n[pin: no window for '%s' — is it open?]\n",
-                     cfg.screens[sel].appName.c_str());
+                     cfg.screens[idx].appName.c_str());
         return;
     }
-    // Swap the slot's capture source.
-    if ((size_t)sel < self.captures->size()) {
-        auto& up = (*self.captures)[sel];
+    if ((size_t)idx < self.captures->size()) {
+        auto& up = (*self.captures)[idx];
         if (up) rns::destroyCapture(*up);
-        (*self.captures)[sel] = std::make_unique<rns::CaptureSource>(cs);
-        rns::sceneSetCaptureSource(self.scene, sel, (*self.captures)[sel].get());
+        (*self.captures)[idx] = std::make_unique<rns::CaptureSource>(cs);
+        rns::sceneSetCaptureSource(self.scene, (int)idx, (*self.captures)[idx].get());
     }
-    std::fprintf(stderr, "\n[slot %d pinned to '%s']\n",
-                 sel + 1, cfg.screens[sel].appName.c_str());
+    std::fprintf(stderr, "\n[slot %ld pinned to '%s']\n",
+                 (long)idx + 1, cfg.screens[idx].appName.c_str());
+}
+
+// Hotkey ⌃⌥P: pin whatever app is frontmost to the selected slot.
+- (void)pinFrontmostAppToSelected {
+    NSRunningApplication* front =
+        [[NSWorkspace sharedWorkspace] frontmostApplication];
+    [self pinAppNamed:front.localizedName toIndex:rns::config().selectedSlot];
 }
 
 // Turn the selected slot back into a draggable virtual screen.
@@ -475,6 +477,20 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     std::fprintf(stderr, "\n[slot %d reverted to a virtual screen]\n", sel + 1);
 }
 
+// --- RNSControlActions (called from the control panel; index-based) --------
+- (void)removeScreenAtIndex:(NSInteger)index {
+    rns::config().selectedSlot = (int)index;
+    [self removeSelectedScreen];
+}
+- (void)revertIndexToScreen:(NSInteger)index {
+    rns::config().selectedSlot = (int)index;
+    [self revertSelectedToScreen];
+}
+- (void)recenter {
+    if (self.imu) self.imu->recenter();
+    std::fprintf(stderr, "\n[recentered]\n");
+}
+
 - (void)applicationWillTerminate:(NSNotification*)note {
     (void)note;
     // Persist the layout the user arranged this session.
@@ -488,6 +504,10 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         [NSEvent removeMonitor:self.globalKeyMonitor];
         self.globalKeyMonitor = nil;
     }
+    rns::ControlPanel cp = self.panel;
+    rns::destroyControlPanel(cp);
+    self.panel = cp;
+
     rns::Scene sc = self.scene;
     rns::destroyScene(sc);
     self.scene = sc;
