@@ -42,7 +42,10 @@ LDFLAGS := \
     -framework Foundation \
     -framework AppKit \
     -framework CoreGraphics \
-    -framework IOKit
+    -framework IOKit \
+    -framework Metal \
+    -framework MetalKit \
+    -framework QuartzCore
 
 .PHONY: all build run clean
 all: build
