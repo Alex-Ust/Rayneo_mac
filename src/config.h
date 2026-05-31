@@ -60,12 +60,16 @@ struct Config {
     //
     // To instead pin a specific app's window to a slot, set
     //   s.source = SlotSource::App; s.appName = "Terminal";
+    // Layout note: a screen of width W at distance D spans an angular width
+    // of 2*atan((W/2)/D). To avoid overlap, the azimuth spacing between
+    // adjacent screens must exceed that. Here W=1.2, D=2.0 → ~33.4° wide,
+    // spaced 35° apart → ~1.6° gap, no overlap. Tune live with [ / ].
     std::vector<ScreenPose> screens = {
-        []{ ScreenPose s{ -28.f, 0.f, 2.f, 1.6f, 0.9f };
+        []{ ScreenPose s{ -35.f, 0.f, 2.0f, 1.2f, 0.675f };
             s.source = SlotSource::Display; return s; }(),
-        []{ ScreenPose s{   0.f, 0.f, 2.f, 1.6f, 0.9f };
+        []{ ScreenPose s{   0.f, 0.f, 2.0f, 1.2f, 0.675f };
             s.source = SlotSource::Display; return s; }(),
-        []{ ScreenPose s{  28.f, 0.f, 2.f, 1.6f, 0.9f };
+        []{ ScreenPose s{  35.f, 0.f, 2.0f, 1.2f, 0.675f };
             s.source = SlotSource::Display; return s; }(),
     };
 
