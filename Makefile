@@ -24,7 +24,7 @@ TARGET   ?= arm64-apple-macosx14.0
 # Compile flags.
 COMMON_CXXFLAGS := \
     -std=c++17 \
-    -Wall -Wextra -Wno-unused-parameter \
+    -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
     -O0 -g \
     -fno-omit-frame-pointer \
     -MMD -MP \

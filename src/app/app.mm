@@ -3,6 +3,7 @@
 #include "../config.h"
 #include "../display/display_locator.h"
 #include "../tracking/quat.h"
+#include "../virtualdisplay/virtual_display_manager.h"
 #include <vector>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
@@ -35,6 +36,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 @property (nonatomic, assign) rns::Scene scene;
 @property (nonatomic, assign) rns::CaptureSource capture;
 @property (nonatomic, assign) std::vector<rns::CaptureSource>* captures;
+@property (nonatomic, assign) rns::VirtualDisplayManager* vdm;
 @property (nonatomic, assign) rns::ImuService* imu; // unowned
 @property (nonatomic, assign) uint32_t glassesDisplayID;
 @property (nonatomic, strong) id keyMonitor;
@@ -102,13 +104,40 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     if (rns::requestScreenRecordingPermission()) {
         const auto& slots = rns::config().screens;
         self.captures = new std::vector<rns::CaptureSource>(slots.size());
+        self.vdm = new rns::VirtualDisplayManager();
+
+        // Pass 1: create a real virtual monitor for every Display slot. We
+        // record the displayID per slot (0 for App slots).
+        std::vector<uint32_t> slotDisplayID(slots.size(), 0);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            if (slots[i].source != rns::SlotSource::App) {
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", i + 1);
+                slotDisplayID[i] = self.vdm->create(nm, 1920, 1080, 60.0,
+                                                    /*hidpi=*/true);
+            }
+        }
+        // Let the main run loop register the new displays with the window
+        // server before we ask ScreenCaptureKit to enumerate them.
+        if (self.vdm->displays().size() > 0) {
+            [[NSRunLoop currentRunLoop]
+                runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
+        }
+
+        // Pass 2: wire each slot's capture.
         for (size_t i = 0; i < slots.size(); ++i) {
             rns::CaptureSource cs;
             if (slots[i].source == rns::SlotSource::App
                 && !slots[i].appName.empty()) {
                 cs = rns::makeAppWindowCapture(
                     (__bridge void*)mtlDev, slots[i].appName, 1920, 1080);
-            } else {
+            } else if (slotDisplayID[i] != 0) {
+                cs = rns::makeDisplayCapture(
+                    (__bridge void*)mtlDev, slotDisplayID[i], 1920, 1080);
+            }
+            if (!cs.objc) {
+                // Fallback so the slot is never blank (private API missing,
+                // app not running, etc.).
                 cs = rns::makeBuiltinDisplayCapture(
                     (__bridge void*)mtlDev, 1920, 1080);
             }
@@ -259,6 +288,14 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         for (auto& c : *self.captures) rns::destroyCapture(c);
         delete self.captures;
         self.captures = nullptr;
+    }
+
+    // Always tear down virtual displays so the user isn't left with phantom
+    // monitors after quit.
+    if (self.vdm) {
+        self.vdm->teardown();
+        delete self.vdm;
+        self.vdm = nullptr;
     }
 }
 

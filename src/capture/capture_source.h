@@ -30,6 +30,12 @@ bool requestScreenRecordingPermission();
 /// CaptureSource with objc == nullptr and prints to stderr.
 CaptureSource makeBuiltinDisplayCapture(void* device, int width, int height);
 
+/// Make a CaptureSource for a specific display by its CGDirectDisplayID
+/// (e.g. a virtual display from VirtualDisplayManager). Returns objc==nullptr
+/// if that display isn't found among the shareable content.
+CaptureSource makeDisplayCapture(void* device, uint32_t displayID,
+                                 int width, int height);
+
 /// Make a CaptureSource for the largest on-screen window whose owning
 /// application's name contains `appNameSubstring` (case-insensitive).
 /// Returns objc == nullptr if no such window is currently open.

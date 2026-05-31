@@ -126,27 +126,11 @@ bool requestScreenRecordingPermission() {
     return CGRequestScreenCaptureAccess() != 0;
 }
 
-CaptureSource makeBuiltinDisplayCapture(void* devicePtr, int width, int height) {
+// Shared display-capture path used by both the built-in and by-id entrypoints.
+static CaptureSource makeDisplayCaptureInternal(id<MTLDevice> device,
+                                                SCDisplay* chosen,
+                                                int width, int height) {
     CaptureSource out;
-    id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
-    if (!device) {
-        std::fprintf(stderr, "makeBuiltinDisplayCapture: no Metal device\n");
-        return out;
-    }
-
-    SCShareableContent* content =
-        [RNSShareableContent fetchSyncWithTimeout:5.0];
-    if (!content) return out;
-    if (content.displays.count == 0) {
-        std::fprintf(stderr, "No SCDisplays found\n");
-        return out;
-    }
-    // Built-in display has the lowest displayID on Apple Silicon laptops.
-    SCDisplay* chosen = content.displays.firstObject;
-    for (SCDisplay* d in content.displays) {
-        if (CGDisplayIsBuiltin(d.displayID)) { chosen = d; break; }
-    }
-
     SCContentFilter* filter =
         [[SCContentFilter alloc] initWithDisplay:chosen excludingWindows:@[]];
 
@@ -166,27 +150,63 @@ CaptureSource makeBuiltinDisplayCapture(void* devicePtr, int width, int height) 
     NSError* err = nil;
     dispatch_queue_t outQ = dispatch_queue_create("rns.capture",
                                                   DISPATCH_QUEUE_SERIAL);
-    BOOL added = [stream addStreamOutput:src
-                                    type:SCStreamOutputTypeScreen
-                      sampleHandlerQueue:outQ
-                                   error:&err];
-    if (!added) {
+    if (![stream addStreamOutput:src
+                            type:SCStreamOutputTypeScreen
+              sampleHandlerQueue:outQ
+                           error:&err]) {
         std::fprintf(stderr, "addStreamOutput failed: %s\n",
                      err.localizedDescription.UTF8String);
         return out;
     }
     src.stream = stream;
-
-    // Async start; failures bubble up via the delegate.
     [stream startCaptureWithCompletionHandler:^(NSError* e) {
         if (e) {
             std::fprintf(stderr, "startCapture failed: %s\n",
                          e.localizedDescription.UTF8String);
         }
     }];
-
     out.objc = (__bridge_retained void*)src;
     return out;
+}
+
+CaptureSource makeBuiltinDisplayCapture(void* devicePtr, int width, int height) {
+    CaptureSource out;
+    id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
+    if (!device) {
+        std::fprintf(stderr, "makeBuiltinDisplayCapture: no Metal device\n");
+        return out;
+    }
+    SCShareableContent* content =
+        [RNSShareableContent fetchSyncWithTimeout:5.0];
+    if (!content || content.displays.count == 0) {
+        std::fprintf(stderr, "No SCDisplays found\n");
+        return out;
+    }
+    SCDisplay* chosen = content.displays.firstObject;
+    for (SCDisplay* d in content.displays) {
+        if (CGDisplayIsBuiltin(d.displayID)) { chosen = d; break; }
+    }
+    return makeDisplayCaptureInternal(device, chosen, width, height);
+}
+
+CaptureSource makeDisplayCapture(void* devicePtr, uint32_t displayID,
+                                 int width, int height) {
+    CaptureSource out;
+    id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
+    if (!device) return out;
+    SCShareableContent* content =
+        [RNSShareableContent fetchSyncWithTimeout:5.0];
+    if (!content) return out;
+    SCDisplay* chosen = nil;
+    for (SCDisplay* d in content.displays) {
+        if (d.displayID == displayID) { chosen = d; break; }
+    }
+    if (!chosen) {
+        std::fprintf(stderr, "makeDisplayCapture: display id=%u not found\n",
+                     (unsigned)displayID);
+        return out;
+    }
+    return makeDisplayCaptureInternal(device, chosen, width, height);
 }
 
 void* captureLatestTexture(CaptureSource& cs) {
