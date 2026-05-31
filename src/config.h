@@ -62,14 +62,15 @@ struct Config {
     //   s.source = SlotSource::App; s.appName = "Terminal";
     // Layout note: a screen of width W at distance D spans an angular width
     // of 2*atan((W/2)/D). To avoid overlap, the azimuth spacing between
-    // adjacent screens must exceed that. Here W=1.2, D=2.0 → ~33.4° wide,
-    // spaced 35° apart → ~1.6° gap, no overlap. Tune live with [ / ].
+    // adjacent screens must exceed that. Here W=1.2, D=1.7 → ~38.8° wide,
+    // spaced 40° apart → ~1.2° gap, no overlap. Closer than before so the
+    // panels feel bigger. Tune live with [ / ] (spread) and - / = (distance).
     std::vector<ScreenPose> screens = {
-        []{ ScreenPose s{ -35.f, 0.f, 2.0f, 1.2f, 0.675f };
+        []{ ScreenPose s{ -40.f, 0.f, 1.7f, 1.2f, 0.675f };
             s.source = SlotSource::Display; return s; }(),
-        []{ ScreenPose s{   0.f, 0.f, 2.0f, 1.2f, 0.675f };
+        []{ ScreenPose s{   0.f, 0.f, 1.7f, 1.2f, 0.675f };
             s.source = SlotSource::Display; return s; }(),
-        []{ ScreenPose s{  35.f, 0.f, 2.0f, 1.2f, 0.675f };
+        []{ ScreenPose s{  40.f, 0.f, 1.7f, 1.2f, 0.675f };
             s.source = SlotSource::Display; return s; }(),
     };
 
