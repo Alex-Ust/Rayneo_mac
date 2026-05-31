@@ -40,21 +40,30 @@ make build       # ./build/RayNeoSpatial + libRayNeoSDK.dylib next to it
 ./build/RayNeoSpatial
 ```
 
-Hotkeys (window must be focused):
+Hotkeys — all chords use **⌃⌥ (Control+Option)** and work GLOBALLY (even
+while you're typing in another app), once you grant Accessibility access
+(System Settings ▸ Privacy & Security ▸ Accessibility, then relaunch).
 
 | Action | Keys |
 | --- | --- |
-| Recenter | `R` or `⌃⌥R` |
-| Spread screens further apart | `]` or `⌃⌥]` |
-| Pull screens together | `[` or `⌃⌥[` |
-| Push screens farther | `=` / `+` or `⌃⌥=` |
-| Pull screens nearer | `-` or `⌃⌥-` |
-| Toggle yaw tracking | `⌃⌥T` |
-| Toggle pitch tracking | `⌃⌥P` |
-| Quit | `⌘Q` or `Esc` |
+| Select slot 1 / 2 / 3 | `⌃⌥1` / `⌃⌥2` / `⌃⌥3` |
+| Cycle selection | `⌃⌥[` / `⌃⌥]` |
+| Move selected left / right (azimuth) | `⌃⌥A` / `⌃⌥D` |
+| Move selected up / down (elevation) | `⌃⌥W` / `⌃⌥S` |
+| Move selected nearer / farther | `⌃⌥-` / `⌃⌥=` |
+| Recenter (bring screens to your gaze) | `⌃⌥R` |
+| Hide / show selected | `⌃⌥V` |
+| Add a screen | `⌃⌥N` |
+| Remove selected screen | `⌃⌥X` |
+| Pin frontmost app to selected slot | `⌃⌥P` |
+| Revert selected slot to a virtual screen | `⌃⌥O` |
+| Toggle yaw / pitch tracking | `⌃⌥Y` / `⌃⌥G` |
+| Quit | `⌘Q` or `Esc` (app focused) |
 
-The terminal that launched the app keeps showing a heartbeat with live
-yaw/pitch/roll + IMU rate.
+The selected screen shows a cyan border. Layout (positions, sizes,
+which slot is an app vs a screen, count) is saved on quit to
+`~/Library/Application Support/RayNeoSpatial/layout.plist` and restored
+on next launch. The terminal also prints a live yaw/pitch/roll heartbeat.
 
 ## Architecture
 
