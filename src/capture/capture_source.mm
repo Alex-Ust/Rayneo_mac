@@ -206,4 +206,98 @@ void destroyCapture(CaptureSource& cs) {
     }
 }
 
+// Helper: make a CaptureSource for one specific SCWindow.
+static CaptureSource makeWindowCaptureInternal(id<MTLDevice> device,
+                                               SCWindow* window,
+                                               int width, int height) {
+    CaptureSource out;
+    SCContentFilter* filter =
+        [[SCContentFilter alloc] initWithDesktopIndependentWindow:window];
+
+    SCStreamConfiguration* cfg = [[SCStreamConfiguration alloc] init];
+    cfg.pixelFormat        = kCVPixelFormatType_32BGRA;
+    cfg.width              = width;
+    cfg.height             = height;
+    cfg.minimumFrameInterval = CMTimeMake(1, 60);
+    cfg.queueDepth         = 5;
+    cfg.showsCursor        = NO;
+    cfg.scalesToFit        = YES;
+
+    RNSCaptureSource* src = [[RNSCaptureSource alloc] initWithDevice:device];
+    SCStream* stream = [[SCStream alloc] initWithFilter:filter
+                                          configuration:cfg
+                                               delegate:src];
+    NSError* err = nil;
+    dispatch_queue_t outQ = dispatch_queue_create("rns.capture.win",
+                                                  DISPATCH_QUEUE_SERIAL);
+    if (![stream addStreamOutput:src
+                            type:SCStreamOutputTypeScreen
+              sampleHandlerQueue:outQ
+                           error:&err]) {
+        std::fprintf(stderr, "window addStreamOutput failed: %s\n",
+                     err.localizedDescription.UTF8String);
+        return out;
+    }
+    src.stream = stream;
+    [stream startCaptureWithCompletionHandler:^(NSError* e) {
+        if (e) {
+            std::fprintf(stderr, "window startCapture failed: %s\n",
+                         e.localizedDescription.UTF8String);
+        }
+    }];
+    out.objc = (__bridge_retained void*)src;
+    return out;
+}
+
+int discoverWindowCaptures(void* devicePtr, int maxCount,
+                           int width, int height,
+                           std::vector<CaptureSource>& out) {
+    out.clear();
+    if (maxCount <= 0) return 0;
+    id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
+    if (!device) return 0;
+
+    SCShareableContent* content =
+        [RNSShareableContent fetchSyncWithTimeout:5.0];
+    if (!content) return 0;
+
+    // Self-app's PID, so we can exclude our own glasses-display window.
+    pid_t myPid = getpid();
+
+    // Filter: on-screen, non-empty title, area > 100x100 px, not own app.
+    NSMutableArray<SCWindow*>* candidates = [NSMutableArray array];
+    for (SCWindow* w in content.windows) {
+        if (!w.onScreen) continue;
+        if (w.frame.size.width  < 100 || w.frame.size.height < 100) continue;
+        if (w.owningApplication.processID == myPid) continue;
+        // Skip pure-decoration windows (no title and no app).
+        if (!w.owningApplication && (w.title.length == 0)) continue;
+        [candidates addObject:w];
+    }
+    // Sort by area descending.
+    [candidates sortUsingComparator:^NSComparisonResult(SCWindow* a, SCWindow* b) {
+        double aA = a.frame.size.width * a.frame.size.height;
+        double aB = b.frame.size.width * b.frame.size.height;
+        if (aA < aB) return NSOrderedDescending;
+        if (aA > aB) return NSOrderedAscending;
+        return NSOrderedSame;
+    }];
+
+    int taken = 0;
+    for (SCWindow* w in candidates) {
+        if (taken >= maxCount) break;
+        std::fprintf(stderr, "  capture[%d] '%s' (%s) %.0fx%.0f\n",
+                     taken,
+                     w.title.UTF8String ?: "",
+                     w.owningApplication.applicationName.UTF8String ?: "?",
+                     w.frame.size.width, w.frame.size.height);
+        CaptureSource cs = makeWindowCaptureInternal(device, w, width, height);
+        if (cs.objc) {
+            out.push_back(cs);
+            ++taken;
+        }
+    }
+    return taken;
+}
+
 } // namespace rns

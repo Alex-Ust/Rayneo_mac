@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 #include <cstdint>
 #include <string>
 
@@ -28,6 +29,15 @@ bool requestScreenRecordingPermission();
 /// On failure (missing permission, OS too old, no displays), returns a
 /// CaptureSource with objc == nullptr and prints to stderr.
 CaptureSource makeBuiltinDisplayCapture(void* device, int width, int height);
+
+/// Discover up to `maxCount` interesting on-screen windows (biggest first,
+/// excluding desktop / menu bar / our own window) and create a CaptureSource
+/// for each. Returns the number of sources actually populated in `out`.
+/// `out` is resized to that count.
+int discoverWindowCaptures(void* device,
+                           int maxCount,
+                           int width, int height,
+                           std::vector<CaptureSource>& out);
 
 /// Latest texture as `id<MTLTexture>` (cast to void* for the header). May be
 /// nullptr if no frame has arrived yet.

@@ -11,8 +11,8 @@ implementation.
 | --------- | ---- | ------ |
 | M0 | CLI: SDK link, live head orientation print, identify glasses display | ✅ done |
 | M1 | Borderless fullscreen Metal window on the glasses display | ✅ done |
-| M2 | ScreenCaptureKit → Metal texture, head-tracked perspective camera | ✅ done (1 of 3 quads live; others procedural) |
-| M3 | Three quads, configurable poses, hotkeys (Phase 1 acceptance) | ⏳ partial (hotkeys done; multi-window capture pending) |
+| M2 | ScreenCaptureKit → Metal texture, head-tracked perspective camera | ✅ done |
+| M3 | Three quads, configurable poses, hotkeys (Phase 1 acceptance) | ✅ done |
 
 ## Why not Swift / Xcode?
 
@@ -117,9 +117,11 @@ center quad. To switch to the live desktop:
 2. Enable `RayNeoSpatial` (or `RayNeoSpatial` in the toggle list).
 3. Quit and re-launch the app.
 
-The captured source is the **built-in display** (so the user can drag
-windows around on it and see them mirror on the center floating quad);
-multi-window capture lands in the next M3 push.
+On launch the app picks the three biggest on-screen windows (excluding
+its own) and routes each onto a quad. If fewer than three windows are
+captureable, the remaining quads mirror the built-in display so all
+three panels stay visible. The console prints the captured window
+titles + sizes at startup.
 
 ## Project layout
 

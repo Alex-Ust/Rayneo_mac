@@ -3,6 +3,7 @@
 #include "../config.h"
 #include "../display/display_locator.h"
 #include "../tracking/quat.h"
+#include <vector>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
@@ -32,6 +33,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 @property (nonatomic, strong) NSWindow*  window;
 @property (nonatomic, assign) rns::Scene scene;
 @property (nonatomic, assign) rns::CaptureSource capture;
+@property (nonatomic, assign) std::vector<rns::CaptureSource>* captures;
 @property (nonatomic, assign) rns::ImuService* imu; // unowned
 @property (nonatomic, assign) uint32_t glassesDisplayID;
 @property (nonatomic, strong) id keyMonitor;
@@ -74,17 +76,31 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     rns::Scene sc = rns::makeScene((__bridge void*)mtkv, self.imu);
     self.scene = sc;
 
-    // Try to start screen capture and wire it into quad index 1 (center).
-    // If permission isn't granted yet, the procedural texture stays visible
-    // and the OS will queue a prompt for the next run.
+    // Try to start screen capture. Prefer 3 distinct on-screen windows
+    // (one per quad). If too few windows are available, fall back to the
+    // built-in display on whatever quads are still empty.
     if (rns::requestScreenRecordingPermission()) {
-        self.capture = rns::makeBuiltinDisplayCapture(
-            (__bridge void*)mtlDev, 1920, 1080);
-        if (self.capture.objc) {
-            rns::sceneSetCaptureSource(self.scene, /*quadIndex=*/1,
-                                       &self->_capture);
-            std::fprintf(stderr,
-                "Capture started (built-in display -> center quad)\n");
+        self.captures = new std::vector<rns::CaptureSource>();
+        int n = rns::discoverWindowCaptures(
+            (__bridge void*)mtlDev,
+            /*maxCount=*/(int)rns::config().screens.size(),
+            1920, 1080, *self.captures);
+        std::fprintf(stderr, "discovered %d window capture(s)\n", n);
+        for (int i = 0; i < n; ++i) {
+            rns::sceneSetCaptureSource(self.scene, i, &(*self.captures)[i]);
+        }
+        if (n < (int)rns::config().screens.size()) {
+            // Fill remaining quads with the built-in display.
+            self.capture = rns::makeBuiltinDisplayCapture(
+                (__bridge void*)mtlDev, 1920, 1080);
+            if (self.capture.objc) {
+                for (int i = n; i < (int)rns::config().screens.size(); ++i) {
+                    rns::sceneSetCaptureSource(self.scene, i, &self->_capture);
+                }
+                std::fprintf(stderr,
+                    "Filled %d quad(s) with built-in display fallback.\n",
+                    (int)rns::config().screens.size() - n);
+            }
         }
     } else {
         std::fprintf(stderr,
@@ -175,6 +191,12 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     rns::CaptureSource cap = self.capture;
     rns::destroyCapture(cap);
     self.capture = cap;
+
+    if (self.captures) {
+        for (auto& c : *self.captures) rns::destroyCapture(c);
+        delete self.captures;
+        self.captures = nullptr;
+    }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)app {
