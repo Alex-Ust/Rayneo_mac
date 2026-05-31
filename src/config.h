@@ -5,12 +5,24 @@
 
 namespace rns {
 
+/// What feeds a slot's quad.
+enum class SlotSource {
+    Display,   // mirror a whole display (built-in now; virtual display in Phase 2)
+    App,       // capture a specific application's window (matched by appName)
+};
+
 struct ScreenPose {
     float azimuthDeg;
     float elevationDeg;
     float distanceM;
     float widthM;
     float heightM;
+
+    // --- Slot behavior (Phase A) ---
+    bool visible = true;             // hidden slots are not drawn (toggle 1/2/3)
+    SlotSource source = SlotSource::App;
+    std::string appName;             // when source==App: substring of the app's
+                                     // name, e.g. "Terminal", "Chrome".
 };
 
 /// Runtime tunables. Will eventually be persisted to a file and live-edited
@@ -28,8 +40,11 @@ struct Config {
     // Axis remap / sign flips. Defaults: identity. The user verifies by
     // rotating the glasses on each axis and inverting signs / swapping
     // axes here until the printed YPR matches motion.
+    // Y (yaw) sign is flipped: on the device, turning the head right
+    // integrated yaw the wrong way, so world-anchored panels drifted with
+    // the head instead of against it. Verified on hardware.
     std::array<int, 3>   gyroAxisPermutation = {0, 1, 2};
-    std::array<float, 3> gyroAxisSign        = {1.f, 1.f, 1.f};
+    std::array<float, 3> gyroAxisSign        = {1.f, -1.f, 1.f};
     std::array<int, 3>   accAxisPermutation  = {0, 1, 2};
     std::array<float, 3> accAxisSign         = {1.f, 1.f, 1.f};
 
@@ -38,10 +53,17 @@ struct Config {
 
     float fovDiagonalDeg = 46.f;
 
+    // Three slots in front of the user. Tighter spread (±28°) so two of the
+    // three fit the ~46° FOV at once; turn the head to reach the third.
+    // Defaults: left = Chrome, center = whole display, right = Terminal.
+    // Toggle visibility with keys 1/2/3.
     std::vector<ScreenPose> screens = {
-        { -40.f, 0.f, 2.f, 1.6f, 0.9f },
-        {   0.f, 0.f, 2.f, 1.6f, 0.9f },
-        {  40.f, 0.f, 2.f, 1.6f, 0.9f },
+        []{ ScreenPose s{ -28.f, 0.f, 2.f, 1.6f, 0.9f };
+            s.source = SlotSource::App; s.appName = "Chrome";   return s; }(),
+        []{ ScreenPose s{   0.f, 0.f, 2.f, 1.6f, 0.9f };
+            s.source = SlotSource::Display;                     return s; }(),
+        []{ ScreenPose s{  28.f, 0.f, 2.f, 1.6f, 0.9f };
+            s.source = SlotSource::App; s.appName = "Terminal"; return s; }(),
     };
 
     // Glasses display heuristic. Each name hint is matched as a case-insensitive

@@ -42,6 +42,11 @@ public:
     void recenter();
     void resetFilter();
 
+    /// Switch the glasses out of side-by-side 3D into 2D (same image to both
+    /// eyes). Requested mode is applied on the next DEVICE_ATTACHED and cached
+    /// so a sleep/wake re-applies it. Pass true for 2D (mono), false for 3D.
+    void setMono(bool mono);
+
 private:
     void pollLoop();
     void handleEvent(const void* eventPtr);
@@ -62,6 +67,10 @@ private:
     uint64_t sampleCount_ = 0;
     bool attached_        = false;
     bool imuEnabled_      = false;
+    std::atomic<bool> wantMono_{true};   // request 2D (mono) by default
+    std::atomic<bool> monoApplied_{false};
+
+    void applyDisplayMode();
 };
 
 } // namespace rns

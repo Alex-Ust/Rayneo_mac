@@ -249,6 +249,43 @@ static CaptureSource makeWindowCaptureInternal(id<MTLDevice> device,
     return out;
 }
 
+CaptureSource makeAppWindowCapture(void* devicePtr,
+                                   const std::string& appNameSubstring,
+                                   int width, int height) {
+    CaptureSource out;
+    id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
+    if (!device) return out;
+
+    SCShareableContent* content =
+        [RNSShareableContent fetchSyncWithTimeout:5.0];
+    if (!content) return out;
+
+    NSString* needle = [[NSString stringWithUTF8String:appNameSubstring.c_str()]
+                        lowercaseString];
+
+    SCWindow* best = nil;
+    double bestArea = 0;
+    for (SCWindow* w in content.windows) {
+        if (!w.onScreen) continue;
+        if (w.frame.size.width < 100 || w.frame.size.height < 100) continue;
+        NSString* appName = [w.owningApplication.applicationName lowercaseString];
+        if (!appName || [appName rangeOfString:needle].location == NSNotFound)
+            continue;
+        double area = w.frame.size.width * w.frame.size.height;
+        if (area > bestArea) { bestArea = area; best = w; }
+    }
+    if (!best) {
+        std::fprintf(stderr, "  no window found for app '%s'\n",
+                     appNameSubstring.c_str());
+        return out;
+    }
+    std::fprintf(stderr, "  app '%s' -> '%s' %.0fx%.0f\n",
+                 appNameSubstring.c_str(),
+                 best.title.UTF8String ?: "",
+                 best.frame.size.width, best.frame.size.height);
+    return makeWindowCaptureInternal(device, best, width, height);
+}
+
 int discoverWindowCaptures(void* devicePtr, int maxCount,
                            int width, int height,
                            std::vector<CaptureSource>& out) {

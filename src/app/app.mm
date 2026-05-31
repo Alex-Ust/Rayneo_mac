@@ -31,12 +31,16 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
 @interface RNSAppDelegate : NSObject <NSApplicationDelegate>
 @property (nonatomic, strong) NSWindow*  window;
+@property (nonatomic, strong) MTKView*   mtkView;
 @property (nonatomic, assign) rns::Scene scene;
 @property (nonatomic, assign) rns::CaptureSource capture;
 @property (nonatomic, assign) std::vector<rns::CaptureSource>* captures;
 @property (nonatomic, assign) rns::ImuService* imu; // unowned
 @property (nonatomic, assign) uint32_t glassesDisplayID;
 @property (nonatomic, strong) id keyMonitor;
+- (void)screenParamsChanged:(NSNotification*)note;
+- (void)logSurfaceGeometry:(NSString*)tag;
+- (void)refitToGlassesScreen;
 @end
 
 @implementation RNSAppDelegate
@@ -69,37 +73,49 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         NSWindowCollectionBehaviorFullScreenAuxiliary];
 
     id<MTLDevice> mtlDev = MTLCreateSystemDefaultDevice();
-    MTKView* mtkv = [[MTKView alloc] initWithFrame:frame device:mtlDev];
+    // Local (0,0)-based bounds for the content view; the window's contentRect
+    // (above) already positions it on the glasses screen in global coords.
+    NSRect localBounds = NSMakeRect(0, 0, frame.size.width, frame.size.height);
+    MTKView* mtkv = [[MTKView alloc] initWithFrame:localBounds device:mtlDev];
     mtkv.framebufferOnly = YES;
+    mtkv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.window setContentView:mtkv];
+    self.mtkView = mtkv;
+
+    // The glasses change DisplayPort timing when we switch 2D<->3D (the IMU
+    // service issues DisplaySet2D on attach), which makes macOS re-publish the
+    // display at a new resolution AFTER this window was sized. Re-fit on every
+    // screen-parameters change so the fullscreen surface always matches.
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(screenParamsChanged:)
+               name:NSApplicationDidChangeScreenParametersNotification
+             object:nil];
+    [self logSurfaceGeometry:@"launch"];
 
     rns::Scene sc = rns::makeScene((__bridge void*)mtkv, self.imu);
     self.scene = sc;
 
-    // Try to start screen capture. Prefer 3 distinct on-screen windows
-    // (one per quad). If too few windows are available, fall back to the
-    // built-in display on whatever quads are still empty.
+    // Wire each slot's capture source per its config: an App slot captures
+    // that app's window; a Display slot mirrors the built-in display. One
+    // CaptureSource per slot, kept in self.captures (index-aligned to slots).
     if (rns::requestScreenRecordingPermission()) {
-        self.captures = new std::vector<rns::CaptureSource>();
-        int n = rns::discoverWindowCaptures(
-            (__bridge void*)mtlDev,
-            /*maxCount=*/(int)rns::config().screens.size(),
-            1920, 1080, *self.captures);
-        std::fprintf(stderr, "discovered %d window capture(s)\n", n);
-        for (int i = 0; i < n; ++i) {
-            rns::sceneSetCaptureSource(self.scene, i, &(*self.captures)[i]);
-        }
-        if (n < (int)rns::config().screens.size()) {
-            // Fill remaining quads with the built-in display.
-            self.capture = rns::makeBuiltinDisplayCapture(
-                (__bridge void*)mtlDev, 1920, 1080);
-            if (self.capture.objc) {
-                for (int i = n; i < (int)rns::config().screens.size(); ++i) {
-                    rns::sceneSetCaptureSource(self.scene, i, &self->_capture);
-                }
-                std::fprintf(stderr,
-                    "Filled %d quad(s) with built-in display fallback.\n",
-                    (int)rns::config().screens.size() - n);
+        const auto& slots = rns::config().screens;
+        self.captures = new std::vector<rns::CaptureSource>(slots.size());
+        for (size_t i = 0; i < slots.size(); ++i) {
+            rns::CaptureSource cs;
+            if (slots[i].source == rns::SlotSource::App
+                && !slots[i].appName.empty()) {
+                cs = rns::makeAppWindowCapture(
+                    (__bridge void*)mtlDev, slots[i].appName, 1920, 1080);
+            } else {
+                cs = rns::makeBuiltinDisplayCapture(
+                    (__bridge void*)mtlDev, 1920, 1080);
+            }
+            (*self.captures)[i] = cs;
+            if (cs.objc) {
+                rns::sceneSetCaptureSource(self.scene, (int)i,
+                                           &(*self.captures)[i]);
             }
         }
     } else {
@@ -172,14 +188,61 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
             std::fprintf(stderr, "\n[pitch tracking %s]\n",
                          cfg.pitchEnabled ? "on" : "off");
         }
+        // Keys 1/2/3: toggle slot visibility (hide a panel so only 2 or 1 show).
+        else if (key >= '1' && key <= '9') {
+            size_t idx = (size_t)(key - '1');
+            if (idx < cfg.screens.size()) {
+                cfg.screens[idx].visible = !cfg.screens[idx].visible;
+                std::fprintf(stderr, "\n[slot %zu %s]\n",
+                             idx + 1, cfg.screens[idx].visible ? "shown" : "hidden");
+            }
+        }
         else consume = false;
         if (consume) return nil;
         return evt;
     }];
 }
 
+- (void)screenParamsChanged:(NSNotification*)note {
+    (void)note;
+    [self refitToGlassesScreen];
+    [self logSurfaceGeometry:@"screen-params-changed"];
+}
+
+- (void)refitToGlassesScreen {
+    NSScreen* screen = nsScreenForDisplayID(self.glassesDisplayID);
+    if (!screen) return;
+    NSRect frame = [screen frame];
+    [self.window setFrame:frame display:YES];
+    // contentView autoresizes with the window, but pin it explicitly to be safe.
+    self.mtkView.frame = NSMakeRect(0, 0, frame.size.width, frame.size.height);
+}
+
+- (void)logSurfaceGeometry:(NSString*)tag {
+    NSScreen* screen = nsScreenForDisplayID(self.glassesDisplayID);
+    NSRect sf = screen ? [screen frame] : NSZeroRect;
+    CGFloat scale = screen ? [screen backingScaleFactor] : 0;
+    NSRect wf = self.window.frame;
+    NSRect cb = self.mtkView.bounds;
+    CGSize ds = self.mtkView.drawableSize;
+    // CGDisplay pixel mode of the glasses display.
+    CGDirectDisplayID did = self.glassesDisplayID;
+    size_t pw = CGDisplayPixelsWide(did), ph = CGDisplayPixelsHigh(did);
+    std::fprintf(stderr,
+        "\n[geom %s] screen.frame=(%.0f,%.0f %0.fx%.0f) scale=%.1f | "
+        "CGpixels=%zux%zu | window=(%.0f,%.0f %.0fx%.0f) | "
+        "view.bounds=%.0fx%.0f | drawable=%.0fx%.0f\n",
+        tag.UTF8String,
+        sf.origin.x, sf.origin.y, sf.size.width, sf.size.height, scale,
+        pw, ph,
+        wf.origin.x, wf.origin.y, wf.size.width, wf.size.height,
+        cb.size.width, cb.size.height,
+        ds.width, ds.height);
+}
+
 - (void)applicationWillTerminate:(NSNotification*)note {
     (void)note;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (self.keyMonitor) {
         [NSEvent removeMonitor:self.keyMonitor];
         self.keyMonitor = nil;

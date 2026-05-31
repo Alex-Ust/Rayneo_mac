@@ -86,6 +86,28 @@ void ImuService::resetFilter() {
     lastSmoothed_    = Quat::identity();
 }
 
+void ImuService::setMono(bool mono) {
+    wantMono_.store(mono);
+    monoApplied_.store(false);
+    // If the device is already attached, apply now from the poll thread next
+    // tick is simplest — but we can also fire it immediately since command
+    // sends are thread-safe in the SDK once attached.
+    bool att;
+    { std::lock_guard<std::mutex> lk(mu_); att = attached_; }
+    if (att) applyDisplayMode();
+}
+
+void ImuService::applyDisplayMode() {
+    if (monoApplied_.load()) return;
+    bool mono = wantMono_.load();
+    RAYNEO_Result r = mono ? Rayneo_DisplaySet2D(ctx_)
+                           : Rayneo_DisplaySet3D(ctx_);
+    std::fprintf(stderr, "\n[display %s] -> %d (%s)\n",
+                 mono ? "2D/mono" : "3D/SBS",
+                 (int)r, Rayneo_ResultToString(r));
+    if (r == RAYNEO_OK) monoApplied_.store(true);
+}
+
 void ImuService::pollLoop() {
     RAYNEO_Event evt{};
     while (workerRunning_.load()) {
@@ -113,10 +135,11 @@ void ImuService::handleEvent(const void* eventPtr) {
             }
             // Now safe to send commands: we're on the poll thread, not inside
             // the SDK's own callback. Order copies RayNeoExample: request
-            // device info, then enable IMU. If EnableImu fails on first try
-            // the device firmware will usually self-enable shortly after and
-            // emit an IMU_ON NOTIFY — see below.
+            // device info, switch to 2D (mono) mode so the same image is
+            // shown to both eyes — otherwise the glasses ship in SBS 3D and
+            // each lens only sees half the panel — then enable IMU.
             (void)Rayneo_RequestDeviceInfo(ctx_);
+            applyDisplayMode();
             RAYNEO_Result e = Rayneo_EnableImu(ctx_);
             if (e == RAYNEO_OK) {
                 std::lock_guard<std::mutex> lk(mu_);
@@ -145,8 +168,11 @@ void ImuService::handleEvent(const void* eventPtr) {
                 std::lock_guard<std::mutex> lk(mu_);
                 imuEnabled_ = false;
             } else if (code == RAYNEO_NOTIFY_WAKE) {
-                // After wake the device often needs IMU re-enabled.
+                // After wake the device often needs IMU re-enabled and the
+                // display mode re-applied.
                 (void)Rayneo_EnableImu(ctx_);
+                monoApplied_.store(false);
+                applyDisplayMode();
             }
             break;
         }

@@ -30,6 +30,13 @@ bool requestScreenRecordingPermission();
 /// CaptureSource with objc == nullptr and prints to stderr.
 CaptureSource makeBuiltinDisplayCapture(void* device, int width, int height);
 
+/// Make a CaptureSource for the largest on-screen window whose owning
+/// application's name contains `appNameSubstring` (case-insensitive).
+/// Returns objc == nullptr if no such window is currently open.
+CaptureSource makeAppWindowCapture(void* device,
+                                   const std::string& appNameSubstring,
+                                   int width, int height);
+
 /// Discover up to `maxCount` interesting on-screen windows (biggest first,
 /// excluding desktop / menu bar / our own window) and create a CaptureSource
 /// for each. Returns the number of sources actually populated in `out`.

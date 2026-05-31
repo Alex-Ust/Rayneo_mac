@@ -302,6 +302,7 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
     const auto& cfg = rns::config();
     for (size_t i = 0; i < cfg.screens.size(); ++i) {
         const auto& s = cfg.screens[i];
+        if (!s.visible) continue;   // hidden slot (toggled with 1/2/3)
         rns::Mat4 model = rns::quadModelMatrix(
             s.azimuthDeg, s.elevationDeg, s.distanceM, s.widthM, s.heightM);
         PerQuad pq{ mat4ToSimd(model) };
