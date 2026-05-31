@@ -50,6 +50,8 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 - (BOOL)handleKeyChars:(NSString*)charsRaw modifiers:(NSEventModifierFlags)mods;
 - (void)addScreen;
 - (void)removeSelectedScreen;
+- (void)pinFrontmostAppToSelected;
+- (void)revertSelectedToScreen;
 - (void)screenParamsChanged:(NSNotification*)note;
 - (void)logSurfaceGeometry:(NSString*)tag;
 - (void)refitToGlassesScreen;
@@ -182,7 +184,8 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 //   ⌃⌥R       recenter (bring screens to where you're looking)
 //   ⌃⌥V       hide / show selected  ⌃⌥[ ⌃⌥]  cycle selection prev / next
 //   ⌃⌥N       add screen            ⌃⌥X       remove selected screen
-//   ⌃⌥Y/P     toggle yaw / pitch tracking
+//   ⌃⌥P       pin frontmost app     ⌃⌥O       revert slot to a screen
+//   ⌃⌥Y/G     toggle yaw / pitch tracking
 - (BOOL)handleKeyChars:(NSString*)charsRaw modifiers:(NSEventModifierFlags)mods {
     NSString* chars = [charsRaw lowercaseString];
     bool ctrl = (mods & NSEventModifierFlagControl) != 0;
@@ -234,13 +237,17 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     } else if (key == 'y') {
         cfg.yawEnabled = !cfg.yawEnabled;
         std::fprintf(stderr, "\n[yaw tracking %s]\n", cfg.yawEnabled ? "on" : "off");
-    } else if (key == 'p') {
+    } else if (key == 'g') {
         cfg.pitchEnabled = !cfg.pitchEnabled;
         std::fprintf(stderr, "\n[pitch tracking %s]\n", cfg.pitchEnabled ? "on" : "off");
     } else if (key == 'n') {
         [self addScreen];
     } else if (key == 'x') {
         [self removeSelectedScreen];
+    } else if (key == 'p') {
+        [self pinFrontmostAppToSelected];
+    } else if (key == 'o') {
+        [self revertSelectedToScreen];
     } else {
         return NO;
     }
@@ -384,6 +391,78 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         cfg.selectedSlot = std::max(0, (int)cfg.screens.size() - 1);
     std::fprintf(stderr, "\n[removed screen %d; %zu left]\n",
                  sel + 1, cfg.screens.size());
+}
+
+// Replace the selected slot's content with the window of whatever app is
+// frontmost right now (e.g. you're in Terminal, press ⌃⌥P → Terminal pins
+// to the selected slot).
+- (void)pinFrontmostAppToSelected {
+    rns::Config& cfg = rns::config();
+    if (!self.captures || cfg.screens.empty()) return;
+    int sel = cfg.selectedSlot;
+    if (sel < 0 || sel >= (int)cfg.screens.size()) return;
+
+    NSRunningApplication* front =
+        [[NSWorkspace sharedWorkspace] frontmostApplication];
+    NSString* appName = front.localizedName;
+    if (!appName || appName.length == 0
+        || [appName isEqualToString:@"RayNeoSpatial"]) {
+        std::fprintf(stderr, "\n[pin: no usable frontmost app]\n");
+        return;
+    }
+
+    cfg.screens[sel].source  = rns::SlotSource::App;
+    cfg.screens[sel].appName = std::string([appName UTF8String]);
+
+    rns::CaptureSource cs = rns::makeAppWindowCapture(
+        (__bridge void*)self.mtlDevice,
+        cfg.screens[sel].appName, 1920, 1080);
+    if (!cs.objc) {
+        std::fprintf(stderr, "\n[pin: no window for '%s' — is it open?]\n",
+                     cfg.screens[sel].appName.c_str());
+        return;
+    }
+    // Swap the slot's capture source.
+    if ((size_t)sel < self.captures->size()) {
+        auto& up = (*self.captures)[sel];
+        if (up) rns::destroyCapture(*up);
+        (*self.captures)[sel] = std::make_unique<rns::CaptureSource>(cs);
+        rns::sceneSetCaptureSource(self.scene, sel, (*self.captures)[sel].get());
+    }
+    std::fprintf(stderr, "\n[slot %d pinned to '%s']\n",
+                 sel + 1, cfg.screens[sel].appName.c_str());
+}
+
+// Turn the selected slot back into a draggable virtual screen.
+- (void)revertSelectedToScreen {
+    rns::Config& cfg = rns::config();
+    if (!self.captures || !self.vdm || cfg.screens.empty()) return;
+    int sel = cfg.selectedSlot;
+    if (sel < 0 || sel >= (int)cfg.screens.size()) return;
+
+    cfg.screens[sel].source = rns::SlotSource::Display;
+    cfg.screens[sel].appName.clear();
+
+    char nm[64];
+    std::snprintf(nm, sizeof(nm), "RayNeo Screen %d", sel + 1);
+    uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+    [[NSRunLoop currentRunLoop]
+        runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
+
+    rns::CaptureSource cs;
+    if (did != 0)
+        cs = rns::makeDisplayCapture((__bridge void*)self.mtlDevice, did, 1920, 1080);
+    if (!cs.objc)
+        cs = rns::makeBuiltinDisplayCapture((__bridge void*)self.mtlDevice, 1920, 1080);
+
+    if ((size_t)sel < self.captures->size()) {
+        auto& up = (*self.captures)[sel];
+        if (up) rns::destroyCapture(*up);
+        (*self.captures)[sel] = std::make_unique<rns::CaptureSource>(cs);
+        if (cs.objc)
+            rns::sceneSetCaptureSource(self.scene, sel, (*self.captures)[sel].get());
+    }
+    std::fprintf(stderr, "\n[slot %d reverted to a virtual screen]\n", sel + 1);
 }
 
 - (void)applicationWillTerminate:(NSNotification*)note {
