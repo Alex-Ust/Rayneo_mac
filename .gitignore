@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+*.o
+*.d
+*.dSYM/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Local-only configuration
+*.local

@@ -1,0 +1,10 @@
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -xc++
+    - -Iinclude
+    - -Isrc
+    - -target
+    - arm64-apple-macosx14.0
+  Remove:
+    - -W*
