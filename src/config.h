@@ -52,7 +52,8 @@ struct Config {
     bool pitchEnabled = true;
 
     // Which slot the control hotkeys act on (index into screens).
-    int selectedSlot = 0;
+    // -1 = nothing selected (no highlight until the user picks one).
+    int selectedSlot = -1;
 
     float fovDiagonalDeg = 46.f;
 

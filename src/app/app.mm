@@ -10,6 +10,7 @@
 #include "control_actions.h"
 #include <vector>
 #include <memory>
+#include <cstring>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
@@ -168,62 +169,84 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
     rns::Config& cfg = rns::config();
     if (cfg.screens.empty()) return NO;
+    const int n = (int)cfg.screens.size();
     int sel = cfg.selectedSlot;
-    if (sel < 0 || sel >= (int)cfg.screens.size()) { sel = 0; cfg.selectedSlot = 0; }
-    auto& cur = cfg.screens[sel];
+    const bool hasSel = (sel >= 0 && sel < n);
 
+    // --- global keys (no slot selection required) ---
     if (key == 'r') {
         if (self.imu) self.imu->recenter();
         std::fprintf(stderr, "\n[recentered]\n");
-    } else if (key >= '1' && key <= '9') {
+        return YES;
+    }
+    if (key == 'n') { [self addScreen]; return YES; }
+    if (key == 'y') {
+        cfg.yawEnabled = !cfg.yawEnabled;
+        std::fprintf(stderr, "\n[yaw tracking %s]\n", cfg.yawEnabled ? "on" : "off");
+        return YES;
+    }
+    if (key == 'g') {
+        cfg.pitchEnabled = !cfg.pitchEnabled;
+        std::fprintf(stderr, "\n[pitch tracking %s]\n", cfg.pitchEnabled ? "on" : "off");
+        return YES;
+    }
+    // --- selection keys ---
+    if (key >= '1' && key <= '9') {
         int idx = key - '1';
-        if (idx < (int)cfg.screens.size()) {
+        if (idx < n) {
             cfg.selectedSlot = idx;
             std::fprintf(stderr, "\n[selected slot %d]\n", idx + 1);
         }
-    } else if (key == '[' || key == ']') {
-        int n = (int)cfg.screens.size();
-        cfg.selectedSlot = (sel + (key == ']' ? 1 : n - 1)) % n;
-        std::fprintf(stderr, "\n[selected slot %d]\n", cfg.selectedSlot + 1);
-    } else if (key == 'a') {
-        cur.azimuthDeg -= 3.0f;
-        std::fprintf(stderr, "\n[slot %d azimuth %.0f°]\n", sel+1, cur.azimuthDeg);
-    } else if (key == 'd') {
-        cur.azimuthDeg += 3.0f;
-        std::fprintf(stderr, "\n[slot %d azimuth %.0f°]\n", sel+1, cur.azimuthDeg);
-    } else if (key == 'w') {
-        cur.elevationDeg += 3.0f;
-        std::fprintf(stderr, "\n[slot %d elevation %.0f°]\n", sel+1, cur.elevationDeg);
-    } else if (key == 's') {
-        cur.elevationDeg -= 3.0f;
-        std::fprintf(stderr, "\n[slot %d elevation %.0f°]\n", sel+1, cur.elevationDeg);
-    } else if (key == '-') {
-        cur.distanceM = std::max(0.3f, cur.distanceM - 0.1f);
-        std::fprintf(stderr, "\n[slot %d distance %.2fm]\n", sel+1, cur.distanceM);
-    } else if (key == '=' || key == '+') {
-        cur.distanceM += 0.1f;
-        std::fprintf(stderr, "\n[slot %d distance %.2fm]\n", sel+1, cur.distanceM);
-    } else if (key == 'v') {
-        cur.visible = !cur.visible;
-        std::fprintf(stderr, "\n[slot %d %s]\n", sel+1, cur.visible ? "shown" : "hidden");
-    } else if (key == 'y') {
-        cfg.yawEnabled = !cfg.yawEnabled;
-        std::fprintf(stderr, "\n[yaw tracking %s]\n", cfg.yawEnabled ? "on" : "off");
-    } else if (key == 'g') {
-        cfg.pitchEnabled = !cfg.pitchEnabled;
-        std::fprintf(stderr, "\n[pitch tracking %s]\n", cfg.pitchEnabled ? "on" : "off");
-    } else if (key == 'n') {
-        [self addScreen];
-    } else if (key == 'x') {
-        [self removeSelectedScreen];
-    } else if (key == 'p') {
-        [self pinFrontmostAppToSelected];
-    } else if (key == 'o') {
-        [self revertSelectedToScreen];
-    } else {
-        return NO;
+        return YES;
     }
-    return YES;
+    if (key == '[' || key == ']') {
+        // First press with nothing selected picks slot 0; then it cycles.
+        int next = hasSel ? (sel + (key == ']' ? 1 : n - 1)) % n : 0;
+        cfg.selectedSlot = next;
+        std::fprintf(stderr, "\n[selected slot %d]\n", next + 1);
+        return YES;
+    }
+
+    // --- per-slot keys: require a selection first ---
+    static const char* slotKeys = "adws-=+vxpo";
+    if (strchr(slotKeys, (int)key)) {
+        if (!hasSel) {
+            std::fprintf(stderr,
+                "\n[no screen selected — press ⌃⌥1/2/3 (or ⌃⌥]) first]\n");
+            return YES;
+        }
+        auto& cur = cfg.screens[sel];
+        if (key == 'a') {
+            cur.azimuthDeg -= 3.0f;
+            std::fprintf(stderr, "\n[slot %d azimuth %.0f°]\n", sel+1, cur.azimuthDeg);
+        } else if (key == 'd') {
+            cur.azimuthDeg += 3.0f;
+            std::fprintf(stderr, "\n[slot %d azimuth %.0f°]\n", sel+1, cur.azimuthDeg);
+        } else if (key == 'w') {
+            cur.elevationDeg += 3.0f;
+            std::fprintf(stderr, "\n[slot %d elevation %.0f°]\n", sel+1, cur.elevationDeg);
+        } else if (key == 's') {
+            cur.elevationDeg -= 3.0f;
+            std::fprintf(stderr, "\n[slot %d elevation %.0f°]\n", sel+1, cur.elevationDeg);
+        } else if (key == '-') {
+            cur.distanceM = std::max(0.3f, cur.distanceM - 0.1f);
+            std::fprintf(stderr, "\n[slot %d distance %.2fm]\n", sel+1, cur.distanceM);
+        } else if (key == '=' || key == '+') {
+            cur.distanceM += 0.1f;
+            std::fprintf(stderr, "\n[slot %d distance %.2fm]\n", sel+1, cur.distanceM);
+        } else if (key == 'v') {
+            cur.visible = !cur.visible;
+            std::fprintf(stderr, "\n[slot %d %s]\n", sel+1, cur.visible ? "shown" : "hidden");
+        } else if (key == 'x') {
+            [self removeSelectedScreen];
+        } else if (key == 'p') {
+            [self pinFrontmostAppToSelected];
+        } else if (key == 'o') {
+            [self revertSelectedToScreen];
+        }
+        return YES;
+    }
+    return NO;
 }
 
 - (void)setupHotkeys {
@@ -486,7 +509,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     self.vdm->teardown();
 
     rns::config().screens = rns::Config{}.screens;  // default 3 screens
-    rns::config().selectedSlot = 0;
+    rns::config().selectedSlot = -1;                // nothing selected
     [self setupCapturesFromConfig];
     std::fprintf(stderr, "\n[layout reset to defaults]\n");
 }

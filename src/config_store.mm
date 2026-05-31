@@ -52,8 +52,9 @@ bool ConfigStore::load() {
             if (s.heightM   < 0.1f) s.heightM   = 0.675f;
             cfg.screens.push_back(s);
         }
-        if (root[@"selectedSlot"])
-            cfg.selectedSlot = [root[@"selectedSlot"] intValue];
+        // selectedSlot is intentionally NOT restored — start with nothing
+        // selected (no highlight) until the user picks a screen.
+        cfg.selectedSlot = -1;
         std::fprintf(stderr, "Loaded layout: %zu screen(s) from %s\n",
                      cfg.screens.size(), path.UTF8String);
         return true;
