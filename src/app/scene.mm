@@ -376,4 +376,11 @@ void sceneSetCaptureSource(Scene s, int quadIndex, CaptureSource* source) {
     (*o.captureSources)[quadIndex] = source;
 }
 
+void sceneEnsureSlotCount(Scene s, int count) {
+    if (!s.objc || count < 0) return;
+    RNSScene* o = (__bridge RNSScene*)s.objc;
+    if (!o.captureSources) return;
+    o.captureSources->resize((size_t)count, nullptr);
+}
+
 } // namespace rns

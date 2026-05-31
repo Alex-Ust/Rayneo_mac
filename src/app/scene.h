@@ -26,4 +26,9 @@ void  destroyScene(Scene&);
 /// Obj-C scene object is mutated.
 void sceneSetCaptureSource(Scene scene, int quadIndex, CaptureSource* source);
 
+/// Grow/shrink the scene's per-slot capture-source table to `count` entries
+/// (new entries start as null → procedural texture). Call after adding or
+/// removing a slot so the table stays index-aligned with cfg.screens.
+void sceneEnsureSlotCount(Scene scene, int count);
+
 } // namespace rns

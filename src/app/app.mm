@@ -4,7 +4,9 @@
 #include "../display/display_locator.h"
 #include "../tracking/quat.h"
 #include "../virtualdisplay/virtual_display_manager.h"
+#include "../capture/capture_source.h"
 #include <vector>
+#include <memory>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
@@ -35,15 +37,19 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 @property (nonatomic, strong) NSWindow*  window;
 @property (nonatomic, strong) MTKView*   mtkView;
 @property (nonatomic, assign) rns::Scene scene;
-@property (nonatomic, assign) rns::CaptureSource capture;
-@property (nonatomic, assign) std::vector<rns::CaptureSource>* captures;
+// One capture source per slot, index-aligned with cfg.screens. unique_ptr so
+// the pointers handed to the scene stay valid when the vector grows/shrinks.
+@property (nonatomic, assign) std::vector<std::unique_ptr<rns::CaptureSource>>* captures;
 @property (nonatomic, assign) rns::VirtualDisplayManager* vdm;
+@property (nonatomic, assign) id<MTLDevice> mtlDevice;
 @property (nonatomic, assign) rns::ImuService* imu; // unowned
 @property (nonatomic, assign) uint32_t glassesDisplayID;
 @property (nonatomic, strong) id keyMonitor;
 @property (nonatomic, strong) id globalKeyMonitor;
 - (void)setupHotkeys;
 - (BOOL)handleKeyChars:(NSString*)charsRaw modifiers:(NSEventModifierFlags)mods;
+- (void)addScreen;
+- (void)removeSelectedScreen;
 - (void)screenParamsChanged:(NSNotification*)note;
 - (void)logSurfaceGeometry:(NSString*)tag;
 - (void)refitToGlassesScreen;
@@ -79,6 +85,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         NSWindowCollectionBehaviorFullScreenAuxiliary];
 
     id<MTLDevice> mtlDev = MTLCreateSystemDefaultDevice();
+    self.mtlDevice = mtlDev;
     // Local (0,0)-based bounds for the content view; the window's contentRect
     // (above) already positions it on the glasses screen in global coords.
     NSRect localBounds = NSMakeRect(0, 0, frame.size.width, frame.size.height);
@@ -107,7 +114,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     // CaptureSource per slot, kept in self.captures (index-aligned to slots).
     if (rns::requestScreenRecordingPermission()) {
         const auto& slots = rns::config().screens;
-        self.captures = new std::vector<rns::CaptureSource>(slots.size());
+        self.captures = new std::vector<std::unique_ptr<rns::CaptureSource>>();
         self.vdm = new rns::VirtualDisplayManager();
 
         // Pass 1: create a real virtual monitor for every Display slot. We
@@ -129,6 +136,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         }
 
         // Pass 2: wire each slot's capture.
+        rns::sceneEnsureSlotCount(self.scene, (int)slots.size());
         for (size_t i = 0; i < slots.size(); ++i) {
             rns::CaptureSource cs;
             if (slots[i].source == rns::SlotSource::App
@@ -145,10 +153,10 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
                 cs = rns::makeBuiltinDisplayCapture(
                     (__bridge void*)mtlDev, 1920, 1080);
             }
-            (*self.captures)[i] = cs;
+            self.captures->push_back(std::make_unique<rns::CaptureSource>(cs));
             if (cs.objc) {
                 rns::sceneSetCaptureSource(self.scene, (int)i,
-                                           &(*self.captures)[i]);
+                                           self.captures->back().get());
             }
         }
     } else {
@@ -173,6 +181,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 //   ⌃⌥W/S     move up / down (elev) ⌃⌥-/=  move nearer / farther (distance)
 //   ⌃⌥R       recenter (bring screens to where you're looking)
 //   ⌃⌥V       hide / show selected  ⌃⌥[ ⌃⌥]  cycle selection prev / next
+//   ⌃⌥N       add screen            ⌃⌥X       remove selected screen
 //   ⌃⌥Y/P     toggle yaw / pitch tracking
 - (BOOL)handleKeyChars:(NSString*)charsRaw modifiers:(NSEventModifierFlags)mods {
     NSString* chars = [charsRaw lowercaseString];
@@ -228,6 +237,10 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     } else if (key == 'p') {
         cfg.pitchEnabled = !cfg.pitchEnabled;
         std::fprintf(stderr, "\n[pitch tracking %s]\n", cfg.pitchEnabled ? "on" : "off");
+    } else if (key == 'n') {
+        [self addScreen];
+    } else if (key == 'x') {
+        [self removeSelectedScreen];
     } else {
         return NO;
     }
@@ -307,6 +320,72 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         ds.width, ds.height);
 }
 
+// Add a new screen slot: a virtual monitor placed just right of the current
+// rightmost screen. Selects it.
+- (void)addScreen {
+    rns::Config& cfg = rns::config();
+    if (!self.captures || !self.vdm) return;
+
+    // Position: 40° to the right of the current max azimuth (or 0 if none).
+    float az = 0.f;
+    for (auto& s : cfg.screens) az = std::max(az, s.azimuthDeg);
+    az = cfg.screens.empty() ? 0.f : az + 40.f;
+
+    rns::ScreenPose pose{ az, 0.f, 1.7f, 1.2f, 0.675f };
+    pose.source = rns::SlotSource::Display;
+    pose.visible = true;
+    cfg.screens.push_back(pose);
+    size_t idx = cfg.screens.size() - 1;
+
+    char nm[64];
+    std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", idx + 1);
+    uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+    [[NSRunLoop currentRunLoop]
+        runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
+
+    rns::CaptureSource cs;
+    if (did != 0)
+        cs = rns::makeDisplayCapture((__bridge void*)self.mtlDevice, did, 1920, 1080);
+    if (!cs.objc)
+        cs = rns::makeBuiltinDisplayCapture((__bridge void*)self.mtlDevice, 1920, 1080);
+
+    self.captures->push_back(std::make_unique<rns::CaptureSource>(cs));
+    rns::sceneEnsureSlotCount(self.scene, (int)cfg.screens.size());
+    if (cs.objc)
+        rns::sceneSetCaptureSource(self.scene, (int)idx, self.captures->back().get());
+
+    cfg.selectedSlot = (int)idx;
+    std::fprintf(stderr, "\n[added screen %zu at %.0f°]\n", idx + 1, az);
+}
+
+// Remove the selected slot: tear down its capture (the virtual display is
+// freed in bulk on quit; we just stop capturing it here) and drop it.
+- (void)removeSelectedScreen {
+    rns::Config& cfg = rns::config();
+    if (!self.captures || cfg.screens.empty()) return;
+    int sel = cfg.selectedSlot;
+    if (sel < 0 || sel >= (int)cfg.screens.size()) return;
+
+    if ((size_t)sel < self.captures->size()) {
+        auto& up = (*self.captures)[sel];
+        if (up) rns::destroyCapture(*up);
+        self.captures->erase(self.captures->begin() + sel);
+    }
+    cfg.screens.erase(cfg.screens.begin() + sel);
+
+    // Re-point the scene's whole table (indices shifted after the erase).
+    rns::sceneEnsureSlotCount(self.scene, (int)cfg.screens.size());
+    for (size_t i = 0; i < cfg.screens.size(); ++i) {
+        rns::CaptureSource* p = (i < self.captures->size())
+                              ? (*self.captures)[i].get() : nullptr;
+        rns::sceneSetCaptureSource(self.scene, (int)i, p);
+    }
+    if (cfg.selectedSlot >= (int)cfg.screens.size())
+        cfg.selectedSlot = std::max(0, (int)cfg.screens.size() - 1);
+    std::fprintf(stderr, "\n[removed screen %d; %zu left]\n",
+                 sel + 1, cfg.screens.size());
+}
+
 - (void)applicationWillTerminate:(NSNotification*)note {
     (void)note;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -322,12 +401,8 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     rns::destroyScene(sc);
     self.scene = sc;
 
-    rns::CaptureSource cap = self.capture;
-    rns::destroyCapture(cap);
-    self.capture = cap;
-
     if (self.captures) {
-        for (auto& c : *self.captures) rns::destroyCapture(c);
+        for (auto& c : *self.captures) if (c) rns::destroyCapture(*c);
         delete self.captures;
         self.captures = nullptr;
     }
