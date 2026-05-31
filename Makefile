@@ -12,7 +12,9 @@ INCLUDE_DIR    := include
 # `make signing`), use it so TCC permissions persist across rebuilds;
 # otherwise fall back to ad-hoc (-), which re-prompts every build.
 CERT_NAME := RayNeoSpatial Self-Signed
-SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q "$(CERT_NAME)" && echo "$(CERT_NAME)" || echo -)
+# Note: no -v — a self-signed cert is "not trusted" so -v hides it, but
+# codesign signs with it fine and TCC keys on its (stable) hash.
+SIGN_ID := $(shell security find-identity -p codesigning 2>/dev/null | grep -q "$(CERT_NAME)" && echo "$(CERT_NAME)" || echo -)
 
 # Find C++/Obj-C++ sources.
 CPP_SRCS := $(shell find src -name '*.cpp')

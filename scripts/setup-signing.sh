@@ -40,11 +40,21 @@ openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
     -days 3650 -config "$TMP/cert.conf" >/dev/null 2>&1
 
-openssl pkcs12 -export -out "$TMP/id.p12" \
-    -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -passout pass: >/dev/null 2>&1
+# -legacy: produce a PKCS12 MAC that macOS's `security` can import (OpenSSL 3
+# defaults to a newer MAC that fails with "MAC verification failed"). Use a
+# non-empty password for the same compatibility reason.
+P12PASS="rayneo"
+if openssl pkcs12 -export -legacy -out "$TMP/id.p12" \
+       -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -passout "pass:$P12PASS" >/dev/null 2>&1; then
+    :
+else
+    # Fallback for LibreSSL / OpenSSL builds without -legacy.
+    openssl pkcs12 -export -out "$TMP/id.p12" \
+        -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -passout "pass:$P12PASS" >/dev/null 2>&1
+fi
 
 # Import key+cert; -A lets codesign use the key without per-run prompts.
-security import "$TMP/id.p12" -k "$KEYCHAIN" -P "" -T /usr/bin/codesign -A
+security import "$TMP/id.p12" -k "$KEYCHAIN" -P "$P12PASS" -T /usr/bin/codesign -A
 
 echo "Done. Identity '$CERT_NAME' installed."
 echo "Now run 'make runapp', grant Screen Recording + Accessibility once,"
