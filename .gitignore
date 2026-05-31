@@ -12,3 +12,6 @@ build/
 
 # Local-only configuration
 *.local
+
+# Built app bundle
+build/RayNeoSpatial.app/

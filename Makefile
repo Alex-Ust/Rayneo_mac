@@ -50,7 +50,9 @@ LDFLAGS := \
     -framework CoreMedia \
     -framework CoreVideo
 
-.PHONY: all build run clean
+APP_BUNDLE := $(BUILD_DIR)/RayNeoSpatial.app
+
+.PHONY: all build run clean app runapp
 all: build
 
 build: $(BIN)
@@ -75,6 +77,31 @@ $(BUILD_DIR)/obj/%.mm.o: %.mm
 
 run: build
 	@$(BIN)
+
+# Assemble a proper .app bundle. The stable CFBundleIdentifier means macOS
+# keeps Screen-Recording / Accessibility grants across rebuilds (TCC keys on
+# the bundle id), so you grant permissions once instead of every build.
+app: build
+	@rm -rf $(APP_BUNDLE)
+	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
+	@mkdir -p $(APP_BUNDLE)/Contents/Frameworks
+	@cp Info.plist $(APP_BUNDLE)/Contents/Info.plist
+	@cp $(BIN) $(APP_BUNDLE)/Contents/MacOS/RayNeoSpatial
+	@cp $(FRAMEWORKS_DIR)/$(DYLIB) $(APP_BUNDLE)/Contents/Frameworks/
+	@# The binary's rpath is @loader_path (next to the exe). Add the bundle's
+	@# Frameworks dir so the dylib resolves inside the .app too.
+	@install_name_tool -add_rpath @executable_path/../Frameworks \
+		$(APP_BUNDLE)/Contents/MacOS/RayNeoSpatial 2>/dev/null || true
+	@xattr -dr com.apple.quarantine $(APP_BUNDLE) 2>/dev/null || true
+	@codesign -s - -f $(APP_BUNDLE)/Contents/Frameworks/$(DYLIB) >/dev/null
+	@codesign -s - -f --identifier com.rayneo.spatial \
+		$(APP_BUNDLE)/Contents/MacOS/RayNeoSpatial >/dev/null
+	@codesign -s - -f --deep $(APP_BUNDLE) >/dev/null
+	@echo "Built $(APP_BUNDLE)"
+
+# Build the bundle and launch it.
+runapp: app
+	@open $(APP_BUNDLE)
 
 clean:
 	rm -rf $(BUILD_DIR)

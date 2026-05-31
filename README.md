@@ -36,9 +36,19 @@ Requirements:
   `/opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib`.
 
 ```sh
-make build       # ./build/RayNeoSpatial + libRayNeoSDK.dylib next to it
-./build/RayNeoSpatial
+make runapp      # build + assemble RayNeoSpatial.app + launch it  (recommended)
+# or:
+make build && ./build/RayNeoSpatial   # bare binary (permissions reset each build)
 ```
+
+Use **`make runapp`**: it packages a real `RayNeoSpatial.app` with a stable
+bundle id (`com.rayneo.spatial`), so the Screen-Recording and Accessibility
+permissions you grant **persist across rebuilds**. The bare binary gets a
+fresh code signature every build, which makes macOS forget its permissions.
+
+A control-panel window opens on your Mac's display: edit each screen's
+position / size / type with sliders, add/remove screens, pin apps, recenter —
+all by hand. Hotkeys (below) do the same and work globally.
 
 Hotkeys — all chords use **⌃⌥ (Control+Option)** and work GLOBALLY (even
 while you're typing in another app), once you grant Accessibility access
