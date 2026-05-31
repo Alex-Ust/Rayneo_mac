@@ -53,17 +53,20 @@ struct Config {
 
     float fovDiagonalDeg = 46.f;
 
-    // Three slots in front of the user. Tighter spread (±28°) so two of the
-    // three fit the ~46° FOV at once; turn the head to reach the third.
-    // Defaults: left = Chrome, center = whole display, right = Terminal.
-    // Toggle visibility with keys 1/2/3.
+    // Three slots in front of the user, each a REAL virtual monitor you can
+    // drag any window onto (Terminal, Chrome, anything). Tighter spread
+    // (±28°) so two of the three fit the ~46° FOV at once; turn the head to
+    // reach the third. Toggle visibility with keys 1/2/3.
+    //
+    // To instead pin a specific app's window to a slot, set
+    //   s.source = SlotSource::App; s.appName = "Terminal";
     std::vector<ScreenPose> screens = {
         []{ ScreenPose s{ -28.f, 0.f, 2.f, 1.6f, 0.9f };
-            s.source = SlotSource::App; s.appName = "Chrome";   return s; }(),
+            s.source = SlotSource::Display; return s; }(),
         []{ ScreenPose s{   0.f, 0.f, 2.f, 1.6f, 0.9f };
-            s.source = SlotSource::Display;                     return s; }(),
+            s.source = SlotSource::Display; return s; }(),
         []{ ScreenPose s{  28.f, 0.f, 2.f, 1.6f, 0.9f };
-            s.source = SlotSource::App; s.appName = "Terminal"; return s; }(),
+            s.source = SlotSource::Display; return s; }(),
     };
 
     // Glasses display heuristic. Each name hint is matched as a case-insensitive
