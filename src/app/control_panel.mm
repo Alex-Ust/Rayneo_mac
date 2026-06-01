@@ -1,6 +1,7 @@
 #include "control_panel.h"
 #include "control_actions.h"
 #include "preview_view.h"
+#include "plane_editor.h"
 #include "../config.h"
 #include "../audio/audio_output.h"
 #import <Foundation/Foundation.h>
@@ -61,6 +62,12 @@
     }
     return self;
 }
+// Swallow hits from the icon/label subviews so the whole tile is the drag
+// handle (otherwise the NSImageView ate mouseDown and dragging never started).
+- (NSView*)hitTest:(NSPoint)point {
+    NSView* hit = [super hitTest:point];
+    return hit ? self : nil;
+}
 - (void)mouseDown:(NSEvent*)event {
     NSPasteboardItem* pbItem = [[NSPasteboardItem alloc] init];
     [pbItem setString:self.appName forType:NSPasteboardTypeString];
@@ -88,9 +95,11 @@
 @property(nonatomic, assign) rns::ImuService* imu;
 @property(nonatomic, assign) id<MTLDevice> device;
 @property(nonatomic, strong) RNSPreviewView* preview;
+@property(nonatomic, strong) RNSPlaneEditorView* planeEditor;
 @property(nonatomic, strong) NSStackView* appsStrip;
 - (void)rebuild;
 - (void)buildAppsStrip;
+- (void)selectMode:(NSInteger)mode;   // 0 = plane editor, 1 = live mirror
 @end
 
 @implementation RNSControlPanel
@@ -125,7 +134,26 @@
 
     NSView* content = [[NSView alloc] initWithFrame:frame];
 
-    // --- Live preview of the glasses render (drag screens / drop apps here) --
+    // --- Mode switch: 2D plane editor (default) vs live 3D mirror -----------
+    RNSBlockTarget* segT = [[RNSBlockTarget alloc] initWithBlock:^(id sender){
+        [self selectMode:[(NSSegmentedControl*)sender selectedSegment]];
+    }];
+    [self.targets addObject:segT];
+    NSSegmentedControl* seg = [NSSegmentedControl
+        segmentedControlWithLabels:@[@"Plane editor", @"Live mirror"]
+                      trackingMode:NSSegmentSwitchTrackingSelectOne
+                            target:segT action:@selector(invoke:)];
+    seg.selectedSegment = 0;
+    seg.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:seg];
+
+    // 2D plane editor — drag rectangles, drop apps. Reliable hand-editing.
+    self.planeEditor = [[RNSPlaneEditorView alloc] initWithActions:self.actions];
+    self.planeEditor.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:self.planeEditor];
+
+    // Live 3D mirror of the glasses render (overlaps the plane editor; the mode
+    // switch toggles which is visible).
     self.preview = [[RNSPreviewView alloc] initWithScene:self.scene
                                                      imu:self.imu
                                                   device:self.device
@@ -133,12 +161,12 @@
     self.preview.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:self.preview];
 
-    // Follow-head toggle + refresh-apps button.
+    // Follow-head toggle (mirror only) + refresh-apps button.
     RNSBlockTarget* followT = [[RNSBlockTarget alloc] initWithBlock:^(id sender){
         self.preview.followHead = ([(NSButton*)sender state] == NSControlStateValueOn);
     }];
     [self.targets addObject:followT];
-    NSButton* followChk = [NSButton checkboxWithTitle:@"Follow head (mirror glasses)"
+    NSButton* followChk = [NSButton checkboxWithTitle:@"Follow head (mirror only)"
                                                target:followT action:@selector(invoke:)];
     followChk.state = NSControlStateValueOff;
     followChk.translatesAutoresizingMaskIntoConstraints = NO;
@@ -200,12 +228,22 @@
     ]];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.preview.topAnchor constraintEqualToAnchor:content.topAnchor constant:8],
-        [self.preview.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
-        [self.preview.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-8],
+        [seg.topAnchor constraintEqualToAnchor:content.topAnchor constant:8],
+        [seg.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
+        [seg.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-8],
+
+        // Plane editor and mirror share the same slot (toggled visible).
+        [self.planeEditor.topAnchor constraintEqualToAnchor:seg.bottomAnchor constant:8],
+        [self.planeEditor.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
+        [self.planeEditor.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-8],
+        [self.planeEditor.heightAnchor constraintEqualToConstant:200],
+
+        [self.preview.topAnchor constraintEqualToAnchor:self.planeEditor.topAnchor],
+        [self.preview.leadingAnchor constraintEqualToAnchor:self.planeEditor.leadingAnchor],
+        [self.preview.trailingAnchor constraintEqualToAnchor:self.planeEditor.trailingAnchor],
         [self.preview.heightAnchor constraintEqualToConstant:200],
 
-        [followChk.topAnchor constraintEqualToAnchor:self.preview.bottomAnchor constant:6],
+        [followChk.topAnchor constraintEqualToAnchor:self.planeEditor.bottomAnchor constant:6],
         [followChk.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
         [appsRefresh.centerYAnchor constraintEqualToAnchor:followChk.centerYAnchor],
         [appsRefresh.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-8],
@@ -226,8 +264,18 @@
 
     self.window.contentView = content;
     [self buildAppsStrip];
+    [self selectMode:0];           // default to the reliable plane editor
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
+}
+
+// Toggle between the 2D plane editor (0) and the live 3D mirror (1). The hidden
+// view's render loop is paused so it doesn't waste GPU.
+- (void)selectMode:(NSInteger)mode {
+    BOOL mirror = (mode == 1);
+    self.planeEditor.hidden = mirror;
+    self.preview.hidden     = !mirror;
+    self.preview.paused     = !mirror;   // stop the MTKView loop when hidden
 }
 
 // Fill the apps strip with draggable tiles for currently-running apps.
