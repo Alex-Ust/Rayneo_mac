@@ -1,4 +1,6 @@
 #pragma once
+#include "scene.h"
+#include "../tracking/imu_service.h"
 
 namespace rns {
 
@@ -10,7 +12,10 @@ struct ControlPanel {
 
 /// Create and show the control panel. `actionsDelegate` is an
 /// id<RNSControlActions> (passed as void* to keep this header pure C++).
-ControlPanel makeControlPanel(void* actionsDelegate);
+/// `scene`/`imu`/`device` feed the embedded live preview of the glasses
+/// render (where screens can be dragged and apps dropped onto them).
+ControlPanel makeControlPanel(void* actionsDelegate, Scene scene,
+                              ImuService* imu, void* device);
 void destroyControlPanel(ControlPanel&);
 
 /// Rebuild the panel's rows from the current config (call after a slot is

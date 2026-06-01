@@ -1,9 +1,11 @@
 #include "control_panel.h"
 #include "control_actions.h"
+#include "preview_view.h"
 #include "../config.h"
 #include "../audio/audio_output.h"
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
+#import <Metal/Metal.h>
 #include <cstdio>
 #include <vector>
 
@@ -19,20 +21,89 @@
 @end
 
 // ---------------------------------------------------------------------------
+// A draggable app tile (icon + name). Dragging it carries the app's name as a
+// string on the pasteboard; dropping it on the preview pins that app to the
+// screen under the cursor.
+@interface RNSAppDragItem : NSView <NSDraggingSource>
+@property(nonatomic, copy)   NSString* appName;
+@property(nonatomic, strong) NSImage*  appIcon;
+@end
+@implementation RNSAppDragItem
+- (instancetype)initWithName:(NSString*)name icon:(NSImage*)icon {
+    if ((self = [super initWithFrame:NSMakeRect(0, 0, 56, 52)])) {
+        _appName = [name copy];
+        _appIcon = icon;
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.widthAnchor constraintEqualToConstant:56].active = YES;
+        [self.heightAnchor constraintEqualToConstant:52].active = YES;
+
+        NSImageView* iv = [NSImageView imageViewWithImage:
+            icon ?: [NSImage imageWithSystemSymbolName:@"app" accessibilityDescription:nil]];
+        iv.translatesAutoresizingMaskIntoConstraints = NO;
+        [self addSubview:iv];
+        NSTextField* lbl = [NSTextField labelWithString:name];
+        lbl.font = [NSFont systemFontOfSize:9];
+        lbl.alignment = NSTextAlignmentCenter;
+        lbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        lbl.translatesAutoresizingMaskIntoConstraints = NO;
+        lbl.toolTip = name;
+        [self addSubview:lbl];
+        [NSLayoutConstraint activateConstraints:@[
+            [iv.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+            [iv.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [iv.widthAnchor constraintEqualToConstant:32],
+            [iv.heightAnchor constraintEqualToConstant:32],
+            [lbl.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [lbl.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+            [lbl.topAnchor constraintEqualToAnchor:iv.bottomAnchor constant:1],
+        ]];
+        self.toolTip = name;
+    }
+    return self;
+}
+- (void)mouseDown:(NSEvent*)event {
+    NSPasteboardItem* pbItem = [[NSPasteboardItem alloc] init];
+    [pbItem setString:self.appName forType:NSPasteboardTypeString];
+    NSDraggingItem* di = [[NSDraggingItem alloc] initWithPasteboardWriter:pbItem];
+    NSImage* img = self.appIcon ?: [NSImage imageWithSystemSymbolName:@"app"
+                                              accessibilityDescription:nil];
+    [di setDraggingFrame:self.bounds contents:img];
+    [self beginDraggingSessionWithItems:@[di] event:event source:self];
+}
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session
+            sourceOperationMaskForDraggingContext:(NSDraggingContext)ctx {
+    (void)session; (void)ctx;
+    return NSDragOperationCopy;
+}
+@end
+
+// ---------------------------------------------------------------------------
 
 @interface RNSControlPanel : NSObject <NSWindowDelegate>
 @property(nonatomic, strong) NSWindow* window;
 @property(nonatomic, strong) NSStackView* rootStack;
 @property(nonatomic, strong) NSMutableArray* targets; // retain block targets
 @property(nonatomic, weak)   id<RNSControlActions> actions;
+@property(nonatomic, assign) rns::Scene scene;
+@property(nonatomic, assign) rns::ImuService* imu;
+@property(nonatomic, assign) id<MTLDevice> device;
+@property(nonatomic, strong) RNSPreviewView* preview;
+@property(nonatomic, strong) NSStackView* appsStrip;
 - (void)rebuild;
+- (void)buildAppsStrip;
 @end
 
 @implementation RNSControlPanel
 
-- (instancetype)initWithActions:(id<RNSControlActions>)actions {
+- (instancetype)initWithActions:(id<RNSControlActions>)actions
+                          scene:(rns::Scene)scene
+                            imu:(rns::ImuService*)imu
+                         device:(id<MTLDevice>)device {
     if ((self = [super init])) {
         _actions = actions;
+        _scene   = scene;
+        _imu     = imu;
+        _device  = device;
         _targets = [NSMutableArray array];
         [self buildWindow];
         [self rebuild];
@@ -41,7 +112,7 @@
 }
 
 - (void)buildWindow {
-    NSRect frame = NSMakeRect(0, 0, 380, 560);
+    NSRect frame = NSMakeRect(0, 0, 380, 720);
     self.window = [[NSWindow alloc]
         initWithContentRect:frame
                   styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -52,11 +123,64 @@
     self.window.releasedWhenClosed = NO;
     self.window.delegate = self;
 
-    // Scrollable vertical stack.
-    NSScrollView* scroll = [[NSScrollView alloc] initWithFrame:frame];
+    NSView* content = [[NSView alloc] initWithFrame:frame];
+
+    // --- Live preview of the glasses render (drag screens / drop apps here) --
+    self.preview = [[RNSPreviewView alloc] initWithScene:self.scene
+                                                     imu:self.imu
+                                                  device:self.device
+                                                 actions:self.actions];
+    self.preview.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:self.preview];
+
+    // Follow-head toggle + refresh-apps button.
+    RNSBlockTarget* followT = [[RNSBlockTarget alloc] initWithBlock:^(id sender){
+        self.preview.followHead = ([(NSButton*)sender state] == NSControlStateValueOn);
+    }];
+    [self.targets addObject:followT];
+    NSButton* followChk = [NSButton checkboxWithTitle:@"Follow head (mirror glasses)"
+                                               target:followT action:@selector(invoke:)];
+    followChk.state = NSControlStateValueOff;
+    followChk.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:followChk];
+
+    NSButton* appsRefresh = [self button:@"↻ apps" block:^(id s){ [self buildAppsStrip]; }];
+    appsRefresh.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:appsRefresh];
+
+    NSTextField* hint = [self label:@"drag an app ↓ onto a screen ↑" bold:NO];
+    hint.textColor = [NSColor secondaryLabelColor];
+    hint.font = [NSFont systemFontOfSize:10];
+    hint.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:hint];
+
+    // Horizontal scroller of draggable running-app tiles.
+    NSScrollView* appsScroll = [[NSScrollView alloc] init];
+    appsScroll.hasHorizontalScroller = YES;
+    appsScroll.hasVerticalScroller = NO;
+    appsScroll.drawsBackground = NO;
+    appsScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* strip = [[NSStackView alloc] init];
+    strip.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    strip.alignment = NSLayoutAttributeTop;
+    strip.spacing = 6;
+    strip.edgeInsets = NSEdgeInsetsMake(2, 4, 2, 4);
+    strip.translatesAutoresizingMaskIntoConstraints = NO;
+    self.appsStrip = strip;
+    appsScroll.documentView = strip;
+    [NSLayoutConstraint activateConstraints:@[
+        [strip.leadingAnchor constraintEqualToAnchor:appsScroll.contentView.leadingAnchor],
+        [strip.topAnchor constraintEqualToAnchor:appsScroll.contentView.topAnchor],
+        [strip.bottomAnchor constraintEqualToAnchor:appsScroll.contentView.bottomAnchor],
+    ]];
+    [content addSubview:appsScroll];
+
+    // --- Scrollable controls (existing rows) --------------------------------
+    NSScrollView* scroll = [[NSScrollView alloc] init];
     scroll.hasVerticalScroller = YES;
     scroll.autohidesScrollers = YES;
     scroll.drawsBackground = NO;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSStackView* stack = [[NSStackView alloc] init];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -74,9 +198,57 @@
         [stack.topAnchor constraintEqualToAnchor:clip.topAnchor],
     ]];
 
-    self.window.contentView = scroll;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.preview.topAnchor constraintEqualToAnchor:content.topAnchor constant:8],
+        [self.preview.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
+        [self.preview.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-8],
+        [self.preview.heightAnchor constraintEqualToConstant:200],
+
+        [followChk.topAnchor constraintEqualToAnchor:self.preview.bottomAnchor constant:6],
+        [followChk.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
+        [appsRefresh.centerYAnchor constraintEqualToAnchor:followChk.centerYAnchor],
+        [appsRefresh.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-8],
+
+        [hint.topAnchor constraintEqualToAnchor:followChk.bottomAnchor constant:4],
+        [hint.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
+
+        [appsScroll.topAnchor constraintEqualToAnchor:hint.bottomAnchor constant:2],
+        [appsScroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:4],
+        [appsScroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-4],
+        [appsScroll.heightAnchor constraintEqualToConstant:64],
+
+        [scroll.topAnchor constraintEqualToAnchor:appsScroll.bottomAnchor constant:6],
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
+    ]];
+
+    self.window.contentView = content;
+    [self buildAppsStrip];
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
+}
+
+// Fill the apps strip with draggable tiles for currently-running apps.
+- (void)buildAppsStrip {
+    for (NSView* v in [self.appsStrip.arrangedSubviews copy]) {
+        [self.appsStrip removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    NSArray<NSRunningApplication*>* apps =
+        [[NSWorkspace sharedWorkspace] runningApplications];
+    NSMutableSet* seen = [NSMutableSet set];
+    for (NSRunningApplication* app in apps) {
+        if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+        NSString* name = app.localizedName;
+        if (!name.length || [name isEqualToString:@"RayNeoSpatial"]) continue;
+        if ([seen containsObject:name]) continue;
+        [seen addObject:name];
+        NSImage* icon = app.icon;
+        if (icon) icon.size = NSMakeSize(32, 32);
+        RNSAppDragItem* tile = [[RNSAppDragItem alloc] initWithName:name icon:icon];
+        [self.appsStrip addArrangedSubview:tile];
+    }
 }
 
 // --- small builders --------------------------------------------------------
@@ -329,9 +501,14 @@
 
 namespace rns {
 
-ControlPanel makeControlPanel(void* actionsDelegate) {
+ControlPanel makeControlPanel(void* actionsDelegate, Scene scene,
+                              ImuService* imu, void* device) {
     id<RNSControlActions> act = (__bridge id<RNSControlActions>)actionsDelegate;
-    RNSControlPanel* p = [[RNSControlPanel alloc] initWithActions:act];
+    id<MTLDevice> dev = (__bridge id<MTLDevice>)device;
+    RNSControlPanel* p = [[RNSControlPanel alloc] initWithActions:act
+                                                            scene:scene
+                                                              imu:imu
+                                                           device:dev];
     ControlPanel out;
     out.objc = (__bridge_retained void*)p;
     return out;

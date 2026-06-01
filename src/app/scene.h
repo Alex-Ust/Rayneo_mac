@@ -1,5 +1,6 @@
 #pragma once
 #include "../tracking/imu_service.h"
+#include "../tracking/quat.h"
 
 #ifdef __OBJC__
 @class MTKView;
@@ -30,5 +31,11 @@ void sceneSetCaptureSource(Scene scene, int quadIndex, CaptureSource* source);
 /// (new entries start as null → procedural texture). Call after adding or
 /// removing a slot so the table stays index-aligned with cfg.screens.
 void sceneEnsureSlotCount(Scene scene, int count);
+
+/// Render the scene's quads into `mtkView` from a camera oriented by
+/// `camOrient` (WORLD->HEAD quaternion). Lets a second view (the on-Mac
+/// preview) reuse the exact same pipeline + live capture textures. Pass the
+/// IMU view quat to mirror the glasses, or Quat::identity() for a stable view.
+void sceneRenderInto(Scene scene, void* mtkView, Quat camOrient);
 
 } // namespace rns

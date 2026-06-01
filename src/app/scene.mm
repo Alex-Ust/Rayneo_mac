@@ -278,17 +278,25 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
 }
 
 - (void)drawInMTKView:(MTKView*)view {
+    // The glasses view follows the head; render with the live IMU orientation.
+    rns::ImuService::Snapshot snap;
+    if (_imu) snap = _imu->snapshot();
+    [self renderInto:view orientation:snap.view];
+}
+
+// Shared render: draw all visible quads into `view` from a camera oriented by
+// `camOrient` (a WORLD->HEAD quaternion). The glasses view passes the live IMU
+// orientation; the on-Mac preview passes either identity (stable) or the IMU
+// orientation (follow-head). Single source of truth — pipeline, geometry and
+// capture textures all live in this one RNSScene.
+- (void)renderInto:(MTKView*)view orientation:(rns::Quat)camOrient {
     MTLRenderPassDescriptor* rpd = view.currentRenderPassDescriptor;
     if (!rpd) return;
     id<CAMetalDrawable> drawable = view.currentDrawable;
     if (!drawable) return;
 
-    // Camera. View matrix = inverse(headQuat) since headQuat rotates world
-    // INTO head; we need the same rotation applied to world points to bring
-    // them into head/eye space. (The world is rendered as seen from the head.)
-    rns::ImuService::Snapshot snap;
-    if (_imu) snap = _imu->snapshot();
-    rns::Mat4 view4 = rns::Mat4::fromQuat(snap.view);
+    // View matrix = rotation that brings world points into the head/eye frame.
+    rns::Mat4 view4 = rns::Mat4::fromQuat(camOrient);
 
     const float aspect = (float)view.drawableSize.width
                        / std::max(1.0f, (float)view.drawableSize.height);
@@ -381,6 +389,13 @@ void sceneEnsureSlotCount(Scene s, int count) {
     RNSScene* o = (__bridge RNSScene*)s.objc;
     if (!o.captureSources) return;
     o.captureSources->resize((size_t)count, nullptr);
+}
+
+void sceneRenderInto(Scene s, void* mtkView, Quat camOrient) {
+    if (!s.objc || !mtkView) return;
+    RNSScene* o = (__bridge RNSScene*)s.objc;
+    MTKView* v = (__bridge MTKView*)mtkView;
+    [o renderInto:v orientation:camOrient];
 }
 
 } // namespace rns

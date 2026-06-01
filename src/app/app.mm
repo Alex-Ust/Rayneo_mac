@@ -142,8 +142,10 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
     [self setupHotkeys];
 
-    // Control panel on the Mac's main display: edit the layout by hand.
-    self.panel = rns::makeControlPanel((__bridge void*)self);
+    // Control panel on the Mac's main display: edit the layout by hand, with a
+    // live preview of the glasses render you can drag screens / drop apps onto.
+    self.panel = rns::makeControlPanel((__bridge void*)self, self.scene,
+                                       self.imu, (__bridge void*)self.mtlDevice);
 }
 
 // Control scheme — all chords use ⌃⌥ (Control+Option) so they don't collide

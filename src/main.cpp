@@ -60,7 +60,7 @@ int main() {
 
     unsigned int v = Rayneo_GetApiVersion();
     std::fprintf(stderr,
-        "RayNeoSpatial — build: panel+audio (B8)\n"
+        "RayNeoSpatial — build: live preview + drag-edit (B9)\n"
         "RayNeo SDK API version: %u.%u\n\n",
         (v >> 16) & 0xFFFF, v & 0xFFFF);
 
