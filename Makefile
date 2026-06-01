@@ -60,12 +60,23 @@ LDFLAGS := \
 
 APP_BUNDLE := $(BUILD_DIR)/RayNeoSpatial.app
 
-.PHONY: all build run clean app runapp signing
+.PHONY: all build run clean app runapp signing trust
 all: build
 
 # One-time: create the stable self-signed signing identity.
 signing:
 	@bash scripts/setup-signing.sh
+
+# One-time: trust that identity for code signing so macOS TCC keys
+# Screen-Recording / Accessibility on the (stable) signing requirement
+# instead of the per-build hash — permissions then survive rebuilds.
+# Prompts for your Mac password (sudo) and modifies the system trust store.
+trust:
+	@security find-certificate -c "$(CERT_NAME)" -p > /tmp/rns_cert.pem
+	@echo "Trusting '$(CERT_NAME)' for code signing (needs your password)…"
+	sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+		-k /Library/Keychains/System.keychain /tmp/rns_cert.pem
+	@echo "Done. Now: tccutil reset ScreenCapture com.rayneo.spatial && make runapp"
 
 build: $(BIN)
 
