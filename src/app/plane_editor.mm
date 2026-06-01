@@ -150,9 +150,8 @@ NSColor* slotColor(size_t i, float alpha) {
         path.lineWidth = isSel ? 3.0 : 1.0;
         [path stroke];
 
-        BOOL isApp = (s.source == rns::SlotSource::App);
-        NSString* label = isApp
-            ? [NSString stringWithUTF8String:(s.appName.empty() ? "app" : s.appName.c_str())]
+        NSString* label = !s.appName.empty()
+            ? [NSString stringWithUTF8String:s.appName.c_str()]
             : [NSString stringWithFormat:@"Screen %zu", i + 1];
         NSMutableParagraphStyle* ps = [NSMutableParagraphStyle new];
         ps.alignment = NSTextAlignmentCenter;
