@@ -1,9 +1,11 @@
 #include "control_panel.h"
 #include "control_actions.h"
 #include "../config.h"
+#include "../audio/audio_output.h"
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #include <cstdio>
+#include <vector>
 
 // Tiny block-as-target shim so AppKit controls can use closures instead of
 // per-field selectors + tag bookkeeping.
@@ -127,6 +129,48 @@
     return b;
 }
 
+// Sound-output picker: a popup of all output devices (built-in, headphones,
+// glasses speakers…) + a refresh button. Selecting one switches the system
+// default output.
+- (NSStackView*)audioRow {
+    NSTextField* lbl = [self label:@"Sound" bold:NO];
+    [lbl.widthAnchor constraintEqualToConstant:48].active = YES;
+
+    NSPopUpButton* pop = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [pop.widthAnchor constraintEqualToConstant:210].active = YES;
+
+    // Capture the device-id list so the action can map selection -> device.
+    auto devices = std::make_shared<std::vector<rns::AudioDevice>>(
+        rns::listOutputDevices());
+    NSInteger selectIdx = -1;
+    for (size_t i = 0; i < devices->size(); ++i) {
+        const auto& d = (*devices)[i];
+        NSString* title = [NSString stringWithUTF8String:d.name.c_str()];
+        [pop addItemWithTitle:title];
+        if (d.isDefault) selectIdx = (NSInteger)i;
+    }
+    if (devices->empty()) [pop addItemWithTitle:@"(no output devices)"];
+    if (selectIdx >= 0) [pop selectItemAtIndex:selectIdx];
+
+    RNSBlockTarget* bt = [[RNSBlockTarget alloc] initWithBlock:^(id sender){
+        NSInteger idx = [(NSPopUpButton*)sender indexOfSelectedItem];
+        if (idx >= 0 && (size_t)idx < devices->size()) {
+            rns::setDefaultOutputDevice((*devices)[idx].id);
+            std::fprintf(stderr, "\n[audio -> %s]\n", (*devices)[idx].name.c_str());
+        }
+    }];
+    [self.targets addObject:bt];
+    pop.target = bt;
+    pop.action = @selector(invoke:);
+
+    NSButton* refresh = [self button:@"↻" block:^(id s){ [self rebuild]; }];
+
+    NSStackView* row = [NSStackView stackViewWithViews:@[lbl, pop, refresh]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.spacing = 8;
+    return row;
+}
+
 // --- rebuild from config ---------------------------------------------------
 
 - (void)rebuild {
@@ -166,6 +210,11 @@
     top2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     top2.spacing = 8;
     [self.rootStack addArrangedSubview:top2];
+
+    // Audio output: choose where system sound goes (Mac speakers/headphones
+    // or the glasses' built-in speakers when connected).
+    [self.rootStack addArrangedSubview:[self audioRow]];
+
     [self.rootStack addArrangedSubview:[self separator]];
 
     for (NSInteger i = 0; i < (NSInteger)cfg.screens.size(); ++i) {

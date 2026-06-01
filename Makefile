@@ -56,7 +56,8 @@ LDFLAGS := \
     -framework QuartzCore \
     -framework ScreenCaptureKit \
     -framework CoreMedia \
-    -framework CoreVideo
+    -framework CoreVideo \
+    -framework CoreAudio
 
 APP_BUNDLE := $(BUILD_DIR)/RayNeoSpatial.app
 
