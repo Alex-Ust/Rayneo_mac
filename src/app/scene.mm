@@ -283,7 +283,7 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
     rns::ImuService::Snapshot snap;
     if (_imu) snap = _imu->snapshot();
     [self renderInto:view orientation:snap.view
-          fovDiagDeg:rns::config().fovDiagonalDeg];
+          fovDiagDeg:rns::config().fovDiagonalDeg queue:_queue];
 }
 
 // Shared render: draw all visible quads into `view` from a camera oriented by
@@ -292,7 +292,7 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
 // orientation (follow-head). Single source of truth — pipeline, geometry and
 // capture textures all live in this one RNSScene.
 - (void)renderInto:(MTKView*)view orientation:(rns::Quat)camOrient
-        fovDiagDeg:(float)fovDiagDeg {
+        fovDiagDeg:(float)fovDiagDeg queue:(id<MTLCommandQueue>)queue {
     MTLRenderPassDescriptor* rpd = view.currentRenderPassDescriptor;
     if (!rpd) return;
     id<CAMetalDrawable> drawable = view.currentDrawable;
@@ -315,7 +315,7 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
     Uniforms u{};
     u.viewProj = mat4ToSimd(viewProj4);
 
-    id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    id<MTLCommandBuffer> cb = [(queue ?: _queue) commandBuffer];
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rpd];
     [enc setRenderPipelineState:_pipeline];
     [enc setDepthStencilState:_depthState];
@@ -396,11 +396,13 @@ void sceneEnsureSlotCount(Scene s, int count) {
     o.captureSources->resize((size_t)count, nullptr);
 }
 
-void sceneRenderInto(Scene s, void* mtkView, Quat camOrient, float fovDiagDeg) {
+void sceneRenderInto(Scene s, void* mtkView, Quat camOrient, float fovDiagDeg,
+                     void* commandQueue) {
     if (!s.objc || !mtkView) return;
     RNSScene* o = (__bridge RNSScene*)s.objc;
     MTKView* v = (__bridge MTKView*)mtkView;
-    [o renderInto:v orientation:camOrient fovDiagDeg:fovDiagDeg];
+    id<MTLCommandQueue> q = (__bridge id<MTLCommandQueue>)commandQueue;
+    [o renderInto:v orientation:camOrient fovDiagDeg:fovDiagDeg queue:q];
 }
 
 } // namespace rns

@@ -269,13 +269,16 @@
     [self.window makeKeyAndOrderFront:nil];
 }
 
-// Toggle between the 2D plane editor (0) and the live 3D mirror (1). The hidden
-// view's render loop is paused so it doesn't waste GPU.
+// Toggle between the 2D plane editor (0) and the live 3D mirror (1). We only
+// hide the inactive view (never pause its MTKView) — toggling paused on a
+// previously-hidden MTKView doesn't reliably resume its draw loop on all GPUs,
+// which left the mirror blank. A hidden MTKView produces no drawable, so it
+// costs nothing while hidden anyway.
 - (void)selectMode:(NSInteger)mode {
     BOOL mirror = (mode == 1);
     self.planeEditor.hidden = mirror;
     self.preview.hidden     = !mirror;
-    self.preview.paused     = !mirror;   // stop the MTKView loop when hidden
+    if (mirror) [self.preview setNeedsDisplay:YES];
 }
 
 // Fill the apps strip with draggable tiles for currently-running apps.

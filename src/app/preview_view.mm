@@ -11,7 +11,9 @@
 // head movement at once (and so picking can reach the side screens).
 static const float kPreviewFovDiag = 115.0f;
 
-@implementation RNSPreviewView
+@implementation RNSPreviewView {
+    id<MTLCommandQueue> _previewQueue;   // own queue (not shared with glasses view)
+}
 
 - (instancetype)initWithScene:(rns::Scene)scene
                           imu:(rns::ImuService*)imu
@@ -22,6 +24,7 @@ static const float kPreviewFovDiag = 115.0f;
         _imu        = imu;
         _actions    = actions;
         _followHead = NO;
+        _previewQueue = [device newCommandQueue];
 
         self.delegate                = self;
         self.colorPixelFormat        = MTLPixelFormatBGRA8Unorm;
@@ -47,7 +50,8 @@ static const float kPreviewFovDiag = 115.0f;
 - (void)drawInMTKView:(MTKView*)view {
     rns::Quat cam = rns::Quat::identity();        // stable by default
     if (_followHead && _imu) cam = _imu->snapshot().view;
-    rns::sceneRenderInto(_scene, (__bridge void*)view, cam, kPreviewFovDiag);
+    rns::sceneRenderInto(_scene, (__bridge void*)view, cam, kPreviewFovDiag,
+                         (__bridge void*)_previewQueue);
 }
 
 // --- input helpers ----------------------------------------------------------
