@@ -123,8 +123,12 @@ app: build
 	@codesign -s "$(SIGN_ID)" -f --deep $(APP_BUNDLE) >/dev/null
 	@echo "Built $(APP_BUNDLE)  (signed: $(SIGN_ID))"
 
-# Build the bundle and launch it.
+# Build the bundle and launch it. Kill any running instance first — otherwise
+# `open` just re-activates the OLD process (same bundle id) and you'd be using
+# a stale build.
 runapp: app
+	@killall RayNeoSpatial 2>/dev/null || true
+	@sleep 1
 	@open $(APP_BUNDLE)
 
 clean:
