@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -21,8 +22,10 @@ struct ScreenPose {
     // --- Slot behavior (Phase A) ---
     bool visible = true;             // hidden slots are not drawn (toggle 1/2/3)
     SlotSource source = SlotSource::App;
-    std::string appName;             // when source==App: substring of the app's
-                                     // name, e.g. "Terminal", "Chrome".
+    std::string appName;             // label: app shown on this slot.
+
+    // Runtime only: CGDirectDisplayID of this slot's virtual monitor.
+    uint32_t backingDisplayID = 0;
 };
 
 /// Runtime tunables. Will eventually be persisted to a file and live-edited
@@ -54,6 +57,11 @@ struct Config {
     // Which slot the control hotkeys act on (index into screens).
     // -1 = nothing selected (no highlight until the user picks one).
     int selectedSlot = -1;
+
+    // When true, dragging an app onto a screen MOVES the app's window onto that
+    // screen's virtual monitor (it leaves the Mac). When false, it mirrors the
+    // window (a copy; the original stays on the Mac).
+    bool moveAppOntoScreen = false;
 
     float fovDiagonalDeg = 46.f;
 

@@ -11,6 +11,7 @@
 #include <vector>
 #include <memory>
 #include <cstring>
+#include <cmath>
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
@@ -57,6 +58,9 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 - (void)removeSelectedScreen;
 - (void)pinFrontmostAppToSelected;
 - (void)revertSelectedToScreen;
+- (BOOL)moveApp:(NSString*)appName toDisplayID:(uint32_t)displayID
+          error:(NSString**)errOut;
+- (void)mirrorAppNamed:(NSString*)appName toIndex:(NSInteger)idx;
 - (void)setupCapturesFromConfig;
 - (void)saveLayout;
 - (void)resetLayout;
@@ -363,6 +367,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     char nm[64];
     std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", idx + 1);
     uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+    cfg.screens[idx].backingDisplayID = did;
     [[NSRunLoop currentRunLoop]
         runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
 
@@ -409,7 +414,10 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
                  sel + 1, cfg.screens.size());
 }
 
-// Core: make slot `idx` capture the window of the named app.
+// Drag an app onto a screen. Two modes (toggle in the panel):
+//  - moveAppOntoScreen ON  : MOVE the app's window onto the slot's virtual
+//                            monitor (it leaves the Mac, stays on the screen).
+//  - moveAppOntoScreen OFF : MIRROR the window (a copy; original stays on Mac).
 - (void)pinAppNamed:(NSString*)appName toIndex:(NSInteger)idx {
     rns::Config& cfg = rns::config();
     if (!self.captures || idx < 0 || idx >= (NSInteger)cfg.screens.size()) return;
@@ -418,12 +426,37 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         std::fprintf(stderr, "\n[pin: no usable app]\n");
         return;
     }
-    std::string needle([appName UTF8String]);
 
-    // Bring the target app's window forward so it's actually on-screen and
-    // compositing. ScreenCaptureKit can't capture an app with no on-screen
-    // window, and an occluded / idle window frequently captures as black —
-    // that's the "nothing happens / goes black" we were seeing.
+    if (cfg.moveAppOntoScreen) {
+        uint32_t did = cfg.screens[idx].backingDisplayID;
+        NSString* err = nil;
+        BOOL ok = (did != 0) && [self moveApp:appName toDisplayID:did error:&err];
+        [NSApp activateIgnoringOtherApps:YES];
+        if (!ok) {
+            NSAlert* a = [[NSAlert alloc] init];
+            a.messageText = [NSString stringWithFormat:@"Can't move “%@”", appName];
+            a.informativeText = err ?: @"This screen has no virtual monitor.";
+            [a addButtonWithTitle:@"OK"];
+            [a runModal];
+            return;
+        }
+        cfg.screens[idx].appName = std::string([appName UTF8String]);
+        std::fprintf(stderr, "\n[slot %ld: moved '%s' onto its monitor]\n",
+                     (long)idx + 1, appName.UTF8String);
+    } else {
+        [self mirrorAppNamed:appName toIndex:idx];
+    }
+
+    rns::ControlPanel cp = self.panel;
+    rns::controlPanelRefresh(cp);
+    self.panel = cp;
+}
+
+// MIRROR mode: replace slot `idx`'s capture with a live capture of the app's
+// window (the window stays on the Mac; the screen shows a copy).
+- (void)mirrorAppNamed:(NSString*)appName toIndex:(NSInteger)idx {
+    rns::Config& cfg = rns::config();
+    std::string needle([appName UTF8String]);
     for (NSRunningApplication* app in
          [[NSWorkspace sharedWorkspace] runningApplications]) {
         if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
@@ -438,31 +471,17 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
     rns::CaptureSource cs = rns::makeAppWindowCapture(
         (__bridge void*)self.mtlDevice, needle, 1920, 1080);
+    [NSApp activateIgnoringOtherApps:YES];
     if (!cs.objc) {
-        // Some apps are slow to surface a window; give it one more beat.
-        [[NSRunLoop currentRunLoop]
-            runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.4]];
-        cs = rns::makeAppWindowCapture(
-            (__bridge void*)self.mtlDevice, needle, 1920, 1080);
-    }
-    if (!cs.objc) {
-        std::fprintf(stderr,
-            "\n[pin failed: no on-screen window for '%s'. Open a window of that "
-            "app on the Mac display and drop it again.]\n", needle.c_str());
-        [NSApp activateIgnoringOtherApps:YES];
         NSAlert* alert = [[NSAlert alloc] init];
-        alert.messageText = [NSString stringWithFormat:
-            @"Can't show “%@”", appName];
+        alert.messageText = [NSString stringWithFormat:@"Can't show “%@”", appName];
         alert.informativeText = [NSString stringWithFormat:
-            @"“%@” has no open window on the Mac display to capture. "
-            "Open a real window of that app (not minimized, not full-screen on "
-            "another Space), then drop it onto a screen again.", appName];
+            @"“%@” has no open window to capture. Open a normal window "
+            "(not minimized), then drop it again.", appName];
         [alert addButtonWithTitle:@"OK"];
         [alert runModal];
-        return;   // leave the slot exactly as it was (no half-applied state)
+        return;
     }
-
-    // Commit only now that we have a real capture.
     cfg.screens[idx].source  = rns::SlotSource::App;
     cfg.screens[idx].appName = needle;
     if ((size_t)idx < self.captures->size()) {
@@ -471,14 +490,84 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         (*self.captures)[idx] = std::make_unique<rns::CaptureSource>(cs);
         rns::sceneSetCaptureSource(self.scene, (int)idx, (*self.captures)[idx].get());
     }
-    std::fprintf(stderr, "\n[slot %ld pinned to '%s']\n",
+    std::fprintf(stderr, "\n[slot %ld mirroring '%s']\n",
                  (long)idx + 1, needle.c_str());
+}
 
-    // Bring our control panel back up and refresh the slot's label.
-    [NSApp activateIgnoringOtherApps:YES];
-    rns::ControlPanel cp = self.panel;
-    rns::controlPanelRefresh(cp);
-    self.panel = cp;
+// MOVE mode: relocate the app's frontmost window onto virtual display
+// `displayID` and resize to fill. Reads the position back to confirm it stuck.
+- (BOOL)moveApp:(NSString*)appName toDisplayID:(uint32_t)displayID
+          error:(NSString**)errOut {
+    if (!AXIsProcessTrusted()) {
+        if (errOut) *errOut = @"RayNeoSpatial needs Accessibility access to move "
+            "windows. Enable it in System Settings ▸ Privacy & Security ▸ "
+            "Accessibility, then try again.";
+        return NO;
+    }
+    pid_t pid = 0;
+    for (NSRunningApplication* app in
+         [[NSWorkspace sharedWorkspace] runningApplications]) {
+        if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+        if ([app.localizedName caseInsensitiveCompare:appName] == NSOrderedSame) {
+            pid = app.processIdentifier;
+            [app unhide];
+            [app activateWithOptions:NSApplicationActivateAllWindows];
+            break;
+        }
+    }
+    if (pid == 0) {
+        if (errOut) *errOut = [NSString stringWithFormat:
+            @"“%@” isn't running. Open it first.", appName];
+        return NO;
+    }
+    [[NSRunLoop currentRunLoop]
+        runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+
+    CGRect b = CGDisplayBounds(displayID);
+    std::fprintf(stderr, "  [move] '%s' -> display %u origin (%.0f,%.0f) size %.0fx%.0f\n",
+                 appName.UTF8String, (unsigned)displayID,
+                 b.origin.x, b.origin.y, b.size.width, b.size.height);
+
+    AXUIElementRef appEl = AXUIElementCreateApplication(pid);
+    if (!appEl) { if (errOut) *errOut = @"Couldn't access the app."; return NO; }
+    CFArrayRef windows = NULL;
+    AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute, (CFTypeRef*)&windows);
+    CGPoint pos = b.origin;
+    CGSize  size = b.size;
+    BOOL moved = NO;
+    if (windows) {
+        for (CFIndex wi = 0; wi < CFArrayGetCount(windows); ++wi) {
+            AXUIElementRef win = (AXUIElementRef)CFArrayGetValueAtIndex(windows, wi);
+            AXUIElementSetAttributeValue(win, kAXMinimizedAttribute, kCFBooleanFalse);
+            AXValueRef posV  = AXValueCreate(kAXValueTypeCGPoint, &pos);
+            AXValueRef sizeV = AXValueCreate(kAXValueTypeCGSize,  &size);
+            AXUIElementSetAttributeValue(win, kAXPositionAttribute, posV);
+            AXUIElementSetAttributeValue(win, kAXSizeAttribute, sizeV);
+            AXUIElementSetAttributeValue(win, kAXPositionAttribute, posV); // re-pin
+            if (posV) CFRelease(posV);
+            if (sizeV) CFRelease(sizeV);
+            // Read the position BACK to see if the move actually stuck.
+            AXValueRef gotV = NULL;
+            CGPoint got = {-99999, -99999};
+            if (AXUIElementCopyAttributeValue(win, kAXPositionAttribute,
+                                              (CFTypeRef*)&gotV) == kAXErrorSuccess && gotV) {
+                AXValueGetValue(gotV, kAXValueTypeCGPoint, &got);
+                CFRelease(gotV);
+            }
+            std::fprintf(stderr, "  [move] window %ld now at (%.0f,%.0f)\n",
+                         (long)wi, got.x, got.y);
+            if (std::abs(got.x - pos.x) < 50 && std::abs(got.y - pos.y) < 50) {
+                moved = YES; break;
+            }
+        }
+        CFRelease(windows);
+    }
+    CFRelease(appEl);
+    if (!moved && errOut) *errOut = [NSString stringWithFormat:
+        @"“%@” wouldn't move onto the screen (the window snapped back). This is "
+        "a known limitation of macOS virtual displays — use the mirror mode "
+        "instead (turn the toggle off).", appName];
+    return moved;
 }
 
 // Hotkey ⌃⌥P: pin whatever app is frontmost to the selected slot.
@@ -501,6 +590,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     char nm[64];
     std::snprintf(nm, sizeof(nm), "RayNeo Screen %d", sel + 1);
     uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+    cfg.screens[sel].backingDisplayID = did;
     [[NSRunLoop currentRunLoop]
         runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
 
@@ -524,16 +614,16 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 // a virtual monitor; App slots capture the app window). Assumes self.captures
 // is empty and self.vdm has no displays yet.
 - (void)setupCapturesFromConfig {
-    const auto& slots = rns::config().screens;
+    auto& slots = rns::config().screens;
     self.captures->clear();
 
+    // Every slot is a real virtual monitor (always renders, fills the quad).
     std::vector<uint32_t> slotDisplayID(slots.size(), 0);
     for (size_t i = 0; i < slots.size(); ++i) {
-        if (slots[i].source != rns::SlotSource::App) {
-            char nm[64];
-            std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", i + 1);
-            slotDisplayID[i] = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
-        }
+        char nm[64];
+        std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", i + 1);
+        slotDisplayID[i] = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+        slots[i].backingDisplayID = slotDisplayID[i];
     }
     if (self.vdm->displays().size() > 0) {
         [[NSRunLoop currentRunLoop]
@@ -543,10 +633,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     rns::sceneEnsureSlotCount(self.scene, (int)slots.size());
     for (size_t i = 0; i < slots.size(); ++i) {
         rns::CaptureSource cs;
-        if (slots[i].source == rns::SlotSource::App && !slots[i].appName.empty()) {
-            cs = rns::makeAppWindowCapture(
-                (__bridge void*)self.mtlDevice, slots[i].appName, 1920, 1080);
-        } else if (slotDisplayID[i] != 0) {
+        if (slotDisplayID[i] != 0) {
             cs = rns::makeDisplayCapture(
                 (__bridge void*)self.mtlDevice, slotDisplayID[i], 1920, 1080);
         }

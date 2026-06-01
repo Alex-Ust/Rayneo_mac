@@ -60,7 +60,7 @@ int main() {
 
     unsigned int v = Rayneo_GetApiVersion();
     std::fprintf(stderr,
-        "RayNeoSpatial — build: capture fills (point-size) (B19)\n"
+        "RayNeoSpatial — build: move-or-mirror toggle (B20)\n"
         "RayNeo SDK API version: %u.%u\n\n",
         (v >> 16) & 0xFFFF, v & 0xFFFF);
 

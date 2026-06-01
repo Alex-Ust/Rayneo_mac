@@ -176,6 +176,19 @@
     followChk.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:followChk];
 
+    // Toggle: move the app's window onto the screen (vs mirror a copy).
+    RNSBlockTarget* moveT = [[RNSBlockTarget alloc] initWithBlock:^(id sender){
+        rns::config().moveAppOntoScreen =
+            ([(NSButton*)sender state] == NSControlStateValueOn);
+    }];
+    [self.persistentTargets addObject:moveT];
+    NSButton* moveChk = [NSButton checkboxWithTitle:@"Drag = move app onto screen (off = mirror copy)"
+                                             target:moveT action:@selector(invoke:)];
+    moveChk.state = rns::config().moveAppOntoScreen ? NSControlStateValueOn
+                                                    : NSControlStateValueOff;
+    moveChk.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:moveChk];
+
     RNSBlockTarget* appsT = [[RNSBlockTarget alloc] initWithBlock:^(id s){
         [self buildAppsStrip]; }];
     [self.persistentTargets addObject:appsT];
@@ -257,7 +270,10 @@
         [appsRefresh.centerYAnchor constraintEqualToAnchor:followChk.centerYAnchor],
         [appsRefresh.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-8],
 
-        [hint.topAnchor constraintEqualToAnchor:followChk.bottomAnchor constant:4],
+        [moveChk.topAnchor constraintEqualToAnchor:followChk.bottomAnchor constant:4],
+        [moveChk.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
+
+        [hint.topAnchor constraintEqualToAnchor:moveChk.bottomAnchor constant:4],
         [hint.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:8],
 
         [appsScroll.topAnchor constraintEqualToAnchor:hint.bottomAnchor constant:2],
