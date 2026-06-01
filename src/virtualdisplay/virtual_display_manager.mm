@@ -32,12 +32,24 @@ uint32_t VirtualDisplayManager::create(const std::string& name,
         desc.name = [NSString stringWithUTF8String:name.c_str()];
         // Physical size ~ a 24" 16:9 panel; only affects default DPI.
         desc.sizeInMillimeters = CGSizeMake(531, 299);
-        desc.maxPixelsWide = (uint32_t)width;
-        desc.maxPixelsHigh = (uint32_t)height;
+        // HiDPI (Retina) makes macOS render into a 2x backing framebuffer, so
+        // the max-pixels cap MUST accommodate 2x or the display comes up
+        // degenerate: it still composites the desktop (wallpaper shows) but a
+        // window MOVED onto it never lands on its real surface, so a capture of
+        // the display shows only the wallpaper. That mismatch — hiDPI=1 with a
+        // 1x max-pixels cap — was the real reason "move app onto screen" did
+        // nothing. Scale the cap with hiDPI so the framebuffer fits.
+        uint32_t scale = hidpi ? 2u : 1u;
+        desc.maxPixelsWide = (uint32_t)width  * scale;
+        desc.maxPixelsHigh = (uint32_t)height * scale;
         desc.productID = 0x1234;
         desc.vendorID  = 0x3456;
         // Vary the serial per display so macOS treats them as distinct.
         desc.serialNum = 0x0001 + (uint32_t)holders.count;
+        desc.terminationHandler = ^(id reason, id ref) {
+            (void)reason; (void)ref;
+            std::fprintf(stderr, "VirtualDisplay: terminated by the system\n");
+        };
 
         CGVirtualDisplay* disp = [[dispClass alloc] initWithDescriptor:desc];
         if (!disp) {

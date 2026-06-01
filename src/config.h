@@ -60,8 +60,9 @@ struct Config {
 
     // When true, dragging an app onto a screen MOVES the app's window onto that
     // screen's virtual monitor (it leaves the Mac). When false, it mirrors the
-    // window (a copy; the original stays on the Mac).
-    bool moveAppOntoScreen = false;
+    // window (a copy; the original stays on the Mac). Default ON now that the
+    // virtual displays are real (1:1, non-HiDPI) and host moved windows.
+    bool moveAppOntoScreen = true;
 
     float fovDiagonalDeg = 46.f;
 

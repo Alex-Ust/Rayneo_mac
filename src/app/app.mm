@@ -366,7 +366,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
     char nm[64];
     std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", idx + 1);
-    uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+    uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/false);
     cfg.screens[idx].backingDisplayID = did;
     [[NSRunLoop currentRunLoop]
         runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
@@ -441,6 +441,17 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
             return;
         }
         cfg.screens[idx].appName = std::string([appName UTF8String]);
+        // The app now lives on this slot's virtual monitor. Make sure the quad
+        // is capturing THAT monitor (not a leftover mirror/window capture), so
+        // the moved window shows up on the screen.
+        rns::CaptureSource cs =
+            rns::makeDisplayCapture((__bridge void*)self.mtlDevice, did, 1920, 1080);
+        if (cs.objc && (size_t)idx < self.captures->size()) {
+            auto& up = (*self.captures)[idx];
+            if (up) rns::destroyCapture(*up);
+            (*self.captures)[idx] = std::make_unique<rns::CaptureSource>(cs);
+            rns::sceneSetCaptureSource(self.scene, (int)idx, (*self.captures)[idx].get());
+        }
         std::fprintf(stderr, "\n[slot %ld: moved '%s' onto its monitor]\n",
                      (long)idx + 1, appName.UTF8String);
     } else {
@@ -499,9 +510,14 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 - (BOOL)moveApp:(NSString*)appName toDisplayID:(uint32_t)displayID
           error:(NSString**)errOut {
     if (!AXIsProcessTrusted()) {
+        // Trigger the system prompt that adds RayNeoSpatial to the Accessibility
+        // list and opens the right Settings pane — one click to grant, instead
+        // of the user hunting for it.
+        NSDictionary* opts = @{ (__bridge id)kAXTrustedCheckOptionPrompt : @YES };
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
         if (errOut) *errOut = @"RayNeoSpatial needs Accessibility access to move "
-            "windows. Enable it in System Settings ▸ Privacy & Security ▸ "
-            "Accessibility, then try again.";
+            "windows. I just opened System Settings ▸ Privacy & Security ▸ "
+            "Accessibility — switch RayNeoSpatial ON there, then drop the app again.";
         return NO;
     }
     pid_t pid = 0;
@@ -589,7 +605,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
 
     char nm[64];
     std::snprintf(nm, sizeof(nm), "RayNeo Screen %d", sel + 1);
-    uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+    uint32_t did = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/false);
     cfg.screens[sel].backingDisplayID = did;
     [[NSRunLoop currentRunLoop]
         runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
@@ -622,7 +638,7 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
     for (size_t i = 0; i < slots.size(); ++i) {
         char nm[64];
         std::snprintf(nm, sizeof(nm), "RayNeo Screen %zu", i + 1);
-        slotDisplayID[i] = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/true);
+        slotDisplayID[i] = self.vdm->create(nm, 1920, 1080, 60.0, /*hidpi=*/false);
         slots[i].backingDisplayID = slotDisplayID[i];
     }
     if (self.vdm->displays().size() > 0) {
