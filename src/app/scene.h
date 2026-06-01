@@ -36,6 +36,6 @@ void sceneEnsureSlotCount(Scene scene, int count);
 /// `camOrient` (WORLD->HEAD quaternion). Lets a second view (the on-Mac
 /// preview) reuse the exact same pipeline + live capture textures. Pass the
 /// IMU view quat to mirror the glasses, or Quat::identity() for a stable view.
-void sceneRenderInto(Scene scene, void* mtkView, Quat camOrient);
+void sceneRenderInto(Scene scene, void* mtkView, Quat camOrient, float fovDiagDeg);
 
 } // namespace rns

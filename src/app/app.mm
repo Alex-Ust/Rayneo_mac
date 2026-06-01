@@ -450,6 +450,15 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
             "\n[pin failed: no on-screen window for '%s'. Open a window of that "
             "app on the Mac display and drop it again.]\n", needle.c_str());
         [NSApp activateIgnoringOtherApps:YES];
+        NSAlert* alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:
+            @"Can't show “%@”", appName];
+        alert.informativeText = [NSString stringWithFormat:
+            @"“%@” has no open window on the Mac display to capture. "
+            "Open a real window of that app (not minimized, not full-screen on "
+            "another Space), then drop it onto a screen again.", appName];
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
         return;   // leave the slot exactly as it was (no half-applied state)
     }
 

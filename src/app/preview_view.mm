@@ -7,6 +7,10 @@
 #include <algorithm>
 #include <cstdio>
 
+// Wider than the glasses' real FOV so the mirror shows all the screens and
+// head movement at once (and so picking can reach the side screens).
+static const float kPreviewFovDiag = 115.0f;
+
 @implementation RNSPreviewView
 
 - (instancetype)initWithScene:(rns::Scene)scene
@@ -43,7 +47,7 @@
 - (void)drawInMTKView:(MTKView*)view {
     rns::Quat cam = rns::Quat::identity();        // stable by default
     if (_followHead && _imu) cam = _imu->snapshot().view;
-    rns::sceneRenderInto(_scene, (__bridge void*)view, cam);
+    rns::sceneRenderInto(_scene, (__bridge void*)view, cam, kPreviewFovDiag);
 }
 
 // --- input helpers ----------------------------------------------------------
@@ -73,7 +77,7 @@
     float nx, ny;
     if (![self ndcAtWindowPoint:event.locationInWindow outX:&nx outY:&ny]) return;
     int slot = rns::pickSlot(nx, ny, [self aspect],
-                             rns::config().fovDiagonalDeg, [self cameraQuat]);
+                             kPreviewFovDiag, [self cameraQuat]);
     rns::config().selectedSlot = slot;            // -1 (empty click) deselects
 }
 
@@ -85,7 +89,7 @@
     if (![self ndcAtWindowPoint:event.locationInWindow outX:&nx outY:&ny]) return;
     float az, el;
     rns::cursorToAzEl(nx, ny, [self aspect],
-                      cfg.fovDiagonalDeg, [self cameraQuat], az, el);
+                      kPreviewFovDiag, [self cameraQuat], az, el);
     cfg.screens[sel].azimuthDeg   = std::max(-90.0f, std::min(90.0f, az));
     cfg.screens[sel].elevationDeg = std::max(-45.0f, std::min(45.0f, el));
 }
@@ -110,8 +114,8 @@
     if (!name.length) return NO;
     float nx, ny;
     if (![self ndcAtWindowPoint:sender.draggingLocation outX:&nx outY:&ny]) return NO;
-    int slot = rns::pickSlot(nx, ny, [self aspect],
-                             rns::config().fovDiagonalDeg, [self cameraQuat]);
+    int slot = rns::pickNearestSlot(nx, ny, [self aspect],
+                                    kPreviewFovDiag, [self cameraQuat]);
     if (slot < 0) {
         std::fprintf(stderr, "\n[drop '%s' missed a screen]\n", name.UTF8String);
         return NO;

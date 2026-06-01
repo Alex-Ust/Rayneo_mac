@@ -278,10 +278,12 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
 }
 
 - (void)drawInMTKView:(MTKView*)view {
-    // The glasses view follows the head; render with the live IMU orientation.
+    // The glasses view follows the head; render with the live IMU orientation
+    // at the glasses' real (narrow) field of view.
     rns::ImuService::Snapshot snap;
     if (_imu) snap = _imu->snapshot();
-    [self renderInto:view orientation:snap.view];
+    [self renderInto:view orientation:snap.view
+          fovDiagDeg:rns::config().fovDiagonalDeg];
 }
 
 // Shared render: draw all visible quads into `view` from a camera oriented by
@@ -289,7 +291,8 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
 // orientation; the on-Mac preview passes either identity (stable) or the IMU
 // orientation (follow-head). Single source of truth — pipeline, geometry and
 // capture textures all live in this one RNSScene.
-- (void)renderInto:(MTKView*)view orientation:(rns::Quat)camOrient {
+- (void)renderInto:(MTKView*)view orientation:(rns::Quat)camOrient
+        fovDiagDeg:(float)fovDiagDeg {
     MTLRenderPassDescriptor* rpd = view.currentRenderPassDescriptor;
     if (!rpd) return;
     id<CAMetalDrawable> drawable = view.currentDrawable;
@@ -300,8 +303,10 @@ static id<MTLTexture> makeProceduralTexture(id<MTLDevice> dev,
 
     const float aspect = (float)view.drawableSize.width
                        / std::max(1.0f, (float)view.drawableSize.height);
-    // Convert diagonal FOV (config) into vertical FOV given the display aspect.
-    const float diag = rns::degToRad(rns::config().fovDiagonalDeg);
+    // Convert diagonal FOV into vertical FOV given the display aspect. The
+    // glasses pass their real FOV; the on-Mac mirror passes a wider one so all
+    // the screens (and head movement) are visible at once.
+    const float diag = rns::degToRad(fovDiagDeg);
     const float fovY = 2.0f * std::atan(std::tan(diag * 0.5f) /
                                         std::sqrt(1.0f + aspect * aspect));
     rns::Mat4 proj = rns::Mat4::perspective(fovY, aspect, 0.05f, 50.0f);
@@ -391,11 +396,11 @@ void sceneEnsureSlotCount(Scene s, int count) {
     o.captureSources->resize((size_t)count, nullptr);
 }
 
-void sceneRenderInto(Scene s, void* mtkView, Quat camOrient) {
+void sceneRenderInto(Scene s, void* mtkView, Quat camOrient, float fovDiagDeg) {
     if (!s.objc || !mtkView) return;
     RNSScene* o = (__bridge RNSScene*)s.objc;
     MTKView* v = (__bridge MTKView*)mtkView;
-    [o renderInto:v orientation:camOrient];
+    [o renderInto:v orientation:camOrient fovDiagDeg:fovDiagDeg];
 }
 
 } // namespace rns

@@ -59,6 +59,27 @@ inline int pickSlot(float ndcX, float ndcY, float aspect,
     return best;
 }
 
+// Like pickSlot but never misses: if the ray hits no quad, returns the visible
+// screen whose center direction is closest to the cursor ray. Used for drops.
+inline int pickNearestSlot(float ndcX, float ndcY, float aspect,
+                           float fovDiagDeg, const Quat& cam) {
+    int hit = pickSlot(ndcX, ndcY, aspect, fovDiagDeg, cam);
+    if (hit >= 0) return hit;
+    const Vec3 D = cursorWorldDir(ndcX, ndcY, aspect, fovDiagDeg, cam);
+    const Config& cfg = config();
+    int best = -1; float bestDot = -2.0f;
+    for (size_t i = 0; i < cfg.screens.size(); ++i) {
+        const auto& s = cfg.screens[i];
+        if (!s.visible) continue;
+        float az = degToRad(s.azimuthDeg), el = degToRad(s.elevationDeg);
+        Vec3 c{ std::cos(el) * std::sin(az), std::sin(el),
+                -std::cos(el) * std::cos(az) };       // screen center direction
+        float d = D.dot(c);
+        if (d > bestDot) { bestDot = d; best = (int)i; }
+    }
+    return best;
+}
+
 // Azimuth/elevation (degrees) of the cursor ray — used to move a screen so its
 // center follows the cursor. Inverse of quadModelMatrix's direction mapping.
 inline void cursorToAzEl(float ndcX, float ndcY, float aspect,
