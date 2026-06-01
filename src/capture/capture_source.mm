@@ -5,6 +5,8 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Metal/Metal.h>
 #include <cstdio>
+#include <cmath>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // RNSCaptureSource — one SCStream + one CVMetalTextureCache, double-buffered
@@ -247,10 +249,21 @@ static CaptureSource makeWindowCaptureInternal(id<MTLDevice> device,
     SCContentFilter* filter =
         [[SCContentFilter alloc] initWithDesktopIndependentWindow:window];
 
+    // Size the output buffer to the WINDOW (not a fixed 1920x1080). SCK places
+    // a small window's content at the buffer origin without upscaling, so a
+    // fixed oversized buffer left the window tiny in a black corner. Matching
+    // the window's pixel size makes the content fill the frame. ~2x for Retina
+    // crispness, clamped to sane bounds.
+    const CGFloat scale = 2.0;
+    int w = (int)std::lround(window.frame.size.width  * scale);
+    int h = (int)std::lround(window.frame.size.height * scale);
+    w = std::max(320, std::min(3840, w ? w : width));
+    h = std::max(240, std::min(2160, h ? h : height));
+
     SCStreamConfiguration* cfg = [[SCStreamConfiguration alloc] init];
     cfg.pixelFormat        = kCVPixelFormatType_32BGRA;
-    cfg.width              = width;
-    cfg.height             = height;
+    cfg.width              = w;
+    cfg.height             = h;
     cfg.minimumFrameInterval = CMTimeMake(1, 60);
     cfg.queueDepth         = 5;
     cfg.showsCursor        = NO;
