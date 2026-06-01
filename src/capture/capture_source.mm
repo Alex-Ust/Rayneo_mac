@@ -155,10 +155,27 @@ static CaptureSource makeDisplayCaptureInternal(id<MTLDevice> device,
     SCContentFilter* filter =
         [[SCContentFilter alloc] initWithDisplay:chosen excludingWindows:@[]];
 
+    // Size the buffer to the display's TRUE pixel resolution. A HiDPI virtual
+    // display is e.g. 1920x1080 points = 3840x2160 px; capturing into a fixed
+    // 1920x1080 buffer left its content tiny in a black corner. Match the real
+    // pixels so the desktop fills the frame.
+    int w = width, h = height;
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(chosen.displayID);
+    if (mode) {
+        size_t pw = CGDisplayModeGetPixelWidth(mode);
+        size_t ph = CGDisplayModeGetPixelHeight(mode);
+        CGDisplayModeRelease(mode);
+        if (pw && ph) { w = (int)pw; h = (int)ph; }
+    }
+    w = std::max(640, std::min(4096, w));
+    h = std::max(480, std::min(2304, h));
+    std::fprintf(stderr, "  display %u capture buffer %dx%d\n",
+                 (unsigned)chosen.displayID, w, h);
+
     SCStreamConfiguration* cfg = [[SCStreamConfiguration alloc] init];
     cfg.pixelFormat        = kCVPixelFormatType_32BGRA;
-    cfg.width              = width;
-    cfg.height             = height;
+    cfg.width              = w;
+    cfg.height             = h;
     cfg.minimumFrameInterval = CMTimeMake(1, 60);
     cfg.queueDepth         = 5;
     cfg.showsCursor        = YES;

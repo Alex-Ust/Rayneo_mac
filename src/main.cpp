@@ -60,7 +60,7 @@ int main() {
 
     unsigned int v = Rayneo_GetApiVersion();
     std::fprintf(stderr,
-        "RayNeoSpatial — build: find app window across Spaces (B16)\n"
+        "RayNeoSpatial — build: display capture sized to real pixels (B17)\n"
         "RayNeo SDK API version: %u.%u\n\n",
         (v >> 16) & 0xFFFF, v & 0xFFFF);
 
