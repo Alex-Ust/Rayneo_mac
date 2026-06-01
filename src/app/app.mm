@@ -586,6 +586,9 @@ CGSize axGetSize(AXUIElementRef el, CFStringRef attr) {
 
     AXUIElementRef appEl = AXUIElementCreateApplication(pid);
     if (!appEl) { if (errOut) *errOut = @"Couldn't access the app."; return NO; }
+    // Give the app time to answer AX requests (avoids kAXErrorCannotComplete on
+    // a busy app being a false "move failed").
+    AXUIElementSetMessagingTimeout(appEl, 2.0f);
 
     // Pick the window to move: the app's main window if it has one, else the
     // first standard (titled, non-panel) window, else just the first window.
@@ -623,7 +626,29 @@ CGSize axGetSize(AXUIElementRef el, CFStringRef attr) {
     BOOL hadWindow = (target != NULL);
     if (target) {
         CGPoint pre = axGetPoint(target, kAXPositionAttribute);
-        moveLog("  [move] chosen window pre-move at (%.0f,%.0f)\n", pre.x, pre.y);
+        // Diagnose what kind of window this is and whether it even accepts moves.
+        Boolean posSettable = false, sizeSettable = false;
+        AXUIElementIsAttributeSettable(target, kAXPositionAttribute, &posSettable);
+        AXUIElementIsAttributeSettable(target, kAXSizeAttribute, &sizeSettable);
+        char rolebuf[64] = "?", titlebuf[128] = "?";
+        CFTypeRef roleRef = NULL, titleRef = NULL;
+        AXUIElementCopyAttributeValue(target, kAXRoleAttribute, &roleRef);
+        AXUIElementCopyAttributeValue(target, kAXTitleAttribute, &titleRef);
+        if (roleRef) {
+            if (CFGetTypeID(roleRef) == CFStringGetTypeID())
+                CFStringGetCString((CFStringRef)roleRef, rolebuf, sizeof(rolebuf),
+                                   kCFStringEncodingUTF8);
+            CFRelease(roleRef);
+        }
+        if (titleRef) {
+            if (CFGetTypeID(titleRef) == CFStringGetTypeID())
+                CFStringGetCString((CFStringRef)titleRef, titlebuf, sizeof(titlebuf),
+                                   kCFStringEncodingUTF8);
+            CFRelease(titleRef);
+        }
+        moveLog("  [move] chosen window pre-move at (%.0f,%.0f) role=%s "
+                "posSettable=%d sizeSettable=%d title=\"%s\"\n",
+                pre.x, pre.y, rolebuf, posSettable, sizeSettable, titlebuf);
         AXUIElementSetAttributeValue(target, kAXMinimizedAttribute, kCFBooleanFalse);
         AXUIElementPerformAction(target, kAXRaiseAction);
         CGPoint pos = b.origin;
@@ -634,9 +659,9 @@ CGSize axGetSize(AXUIElementRef el, CFStringRef attr) {
         for (int pass = 0; pass < 4 && !moved; ++pass) {
             AXValueRef posV  = AXValueCreate(kAXValueTypeCGPoint, &pos);
             AXValueRef sizeV = AXValueCreate(kAXValueTypeCGSize,  &size);
-            AXUIElementSetAttributeValue(target, kAXPositionAttribute, posV);
-            AXUIElementSetAttributeValue(target, kAXSizeAttribute, sizeV);
-            AXUIElementSetAttributeValue(target, kAXPositionAttribute, posV);
+            AXError ep1 = AXUIElementSetAttributeValue(target, kAXPositionAttribute, posV);
+            AXError es  = AXUIElementSetAttributeValue(target, kAXSizeAttribute, sizeV);
+            AXError ep2 = AXUIElementSetAttributeValue(target, kAXPositionAttribute, posV);
             if (posV)  CFRelease(posV);
             if (sizeV) CFRelease(sizeV);
             [[NSRunLoop currentRunLoop]
@@ -648,9 +673,10 @@ CGSize axGetSize(AXUIElementRef el, CFStringRef attr) {
             BOOL inBounds = CGRectContainsPoint(b, center);
             BOOL nearOrigin = std::abs(got.x - pos.x) < 100
                            && std::abs(got.y - pos.y) < 100;
-            moveLog("  [move] pass %d: set (%.0f,%.0f) -> now (%.0f,%.0f) "
-                    "%.0fx%.0f center(%.0f,%.0f) inBounds=%d\n",
-                    pass, pos.x, pos.y, got.x, got.y, gs.width, gs.height,
+            moveLog("  [move] pass %d: set (%.0f,%.0f) errP=%d errS=%d errP2=%d "
+                    "-> now (%.0f,%.0f) %.0fx%.0f center(%.0f,%.0f) inBounds=%d\n",
+                    pass, pos.x, pos.y, (int)ep1, (int)es, (int)ep2,
+                    got.x, got.y, gs.width, gs.height,
                     center.x, center.y, inBounds);
             if (inBounds || nearOrigin) moved = YES;
         }

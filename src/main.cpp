@@ -60,7 +60,7 @@ int main() {
 
     unsigned int v = Rayneo_GetApiVersion();
     std::fprintf(stderr,
-        "RayNeoSpatial — build: robust AX window-move + file log (B22)\n"
+        "RayNeoSpatial — build: AX move error-code diagnostics (B23)\n"
         "RayNeo SDK API version: %u.%u\n\n",
         (v >> 16) & 0xFFFF, v & 0xFFFF);
 
