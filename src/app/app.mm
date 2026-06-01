@@ -418,16 +418,44 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         std::fprintf(stderr, "\n[pin: no usable app]\n");
         return;
     }
-    cfg.screens[idx].source  = rns::SlotSource::App;
-    cfg.screens[idx].appName = std::string([appName UTF8String]);
+    std::string needle([appName UTF8String]);
+
+    // Bring the target app's window forward so it's actually on-screen and
+    // compositing. ScreenCaptureKit can't capture an app with no on-screen
+    // window, and an occluded / idle window frequently captures as black —
+    // that's the "nothing happens / goes black" we were seeing.
+    for (NSRunningApplication* app in
+         [[NSWorkspace sharedWorkspace] runningApplications]) {
+        if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+        if ([app.localizedName caseInsensitiveCompare:appName] == NSOrderedSame) {
+            [app unhide];
+            [app activateWithOptions:NSApplicationActivateAllWindows];
+            break;
+        }
+    }
+    [[NSRunLoop currentRunLoop]
+        runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.35]];
 
     rns::CaptureSource cs = rns::makeAppWindowCapture(
-        (__bridge void*)self.mtlDevice, cfg.screens[idx].appName, 1920, 1080);
+        (__bridge void*)self.mtlDevice, needle, 1920, 1080);
     if (!cs.objc) {
-        std::fprintf(stderr, "\n[pin: no window for '%s' — is it open?]\n",
-                     cfg.screens[idx].appName.c_str());
-        return;
+        // Some apps are slow to surface a window; give it one more beat.
+        [[NSRunLoop currentRunLoop]
+            runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.4]];
+        cs = rns::makeAppWindowCapture(
+            (__bridge void*)self.mtlDevice, needle, 1920, 1080);
     }
+    if (!cs.objc) {
+        std::fprintf(stderr,
+            "\n[pin failed: no on-screen window for '%s'. Open a window of that "
+            "app on the Mac display and drop it again.]\n", needle.c_str());
+        [NSApp activateIgnoringOtherApps:YES];
+        return;   // leave the slot exactly as it was (no half-applied state)
+    }
+
+    // Commit only now that we have a real capture.
+    cfg.screens[idx].source  = rns::SlotSource::App;
+    cfg.screens[idx].appName = needle;
     if ((size_t)idx < self.captures->size()) {
         auto& up = (*self.captures)[idx];
         if (up) rns::destroyCapture(*up);
@@ -435,7 +463,13 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         rns::sceneSetCaptureSource(self.scene, (int)idx, (*self.captures)[idx].get());
     }
     std::fprintf(stderr, "\n[slot %ld pinned to '%s']\n",
-                 (long)idx + 1, cfg.screens[idx].appName.c_str());
+                 (long)idx + 1, needle.c_str());
+
+    // Bring our control panel back up and refresh the slot's label.
+    [NSApp activateIgnoringOtherApps:YES];
+    rns::ControlPanel cp = self.panel;
+    rns::controlPanelRefresh(cp);
+    self.panel = cp;
 }
 
 // Hotkey ⌃⌥P: pin whatever app is frontmost to the selected slot.

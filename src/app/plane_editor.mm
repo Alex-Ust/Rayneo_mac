@@ -74,6 +74,23 @@ NSColor* slotColor(size_t i, float alpha) {
     return -1;
 }
 
+// Like slotAtPoint: but never misses — falls back to the nearest visible
+// screen by center distance. Used for app drops so a slightly-off drop still
+// lands on a screen.
+- (NSInteger)nearestSlotAtPoint:(NSPoint)p {
+    NSInteger hit = [self slotAtPoint:p];
+    if (hit >= 0) return hit;
+    const auto& screens = rns::config().screens;
+    NSInteger best = -1; CGFloat bestD = 1e18;
+    for (size_t i = 0; i < screens.size(); ++i) {
+        if (!screens[i].visible) continue;
+        NSPoint c = [self centerForAz:screens[i].azimuthDeg el:screens[i].elevationDeg];
+        CGFloat d = (c.x - p.x) * (c.x - p.x) + (c.y - p.y) * (c.y - p.y);
+        if (d < bestD) { bestD = d; best = (NSInteger)i; }
+    }
+    return best;
+}
+
 // --- drawing ----------------------------------------------------------------
 
 - (void)drawRect:(NSRect)dirty {
@@ -197,7 +214,7 @@ NSColor* slotColor(size_t i, float alpha) {
     NSString* name = [sender.draggingPasteboard stringForType:NSPasteboardTypeString];
     if (!name.length) return NO;
     NSPoint p = [self convertPoint:sender.draggingLocation fromView:nil];
-    NSInteger idx = [self slotAtPoint:p];
+    NSInteger idx = [self nearestSlotAtPoint:p];
     if (idx < 0) return NO;
     rns::config().selectedSlot = (int)idx;
     [self.actions pinAppNamed:name toIndex:idx];
