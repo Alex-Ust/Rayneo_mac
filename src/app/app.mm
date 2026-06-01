@@ -19,6 +19,7 @@
 #import <ApplicationServices/ApplicationServices.h>  // AXIsProcessTrustedWithOptions
 
 #include <cstdio>
+#include <cstdarg>
 
 namespace {
 
@@ -31,6 +32,45 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         if (num && [num isEqualToNumber:target]) return s;
     }
     return nil;
+}
+
+// Diagnostics for the window-move path. `make runapp` launches via Launch
+// Services, so stderr never reaches the terminal — mirror the key lines to a
+// file in the project folder so we can read what actually happened.
+void moveLog(const char* fmt, ...) {
+    char buf[1024];
+    va_list ap; va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    std::fprintf(stderr, "%s", buf);
+    if (FILE* f = std::fopen(
+            "/Users/alex_ust/Desktop/RayNeoSpatial/rns-move.log", "a")) {
+        std::fputs(buf, f);
+        std::fclose(f);
+    }
+}
+
+// Read an AXValue point/size attribute (origin/size). Returns a sentinel on
+// failure so the caller can tell "not readable" from a real coordinate.
+CGPoint axGetPoint(AXUIElementRef el, CFStringRef attr) {
+    CGPoint p = {-999999, -999999};
+    AXValueRef v = NULL;
+    if (AXUIElementCopyAttributeValue(el, attr, (CFTypeRef*)&v) == kAXErrorSuccess
+        && v) {
+        AXValueGetValue(v, kAXValueTypeCGPoint, &p);
+        CFRelease(v);
+    }
+    return p;
+}
+CGSize axGetSize(AXUIElementRef el, CFStringRef attr) {
+    CGSize s = {0, 0};
+    AXValueRef v = NULL;
+    if (AXUIElementCopyAttributeValue(el, attr, (CFTypeRef*)&v) == kAXErrorSuccess
+        && v) {
+        AXValueGetValue(v, kAXValueTypeCGSize, &s);
+        CFRelease(v);
+    }
+    return s;
 }
 
 } // namespace
@@ -540,49 +580,93 @@ NSScreen* nsScreenForDisplayID(uint32_t displayID) {
         runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
 
     CGRect b = CGDisplayBounds(displayID);
-    std::fprintf(stderr, "  [move] '%s' -> display %u origin (%.0f,%.0f) size %.0fx%.0f\n",
-                 appName.UTF8String, (unsigned)displayID,
-                 b.origin.x, b.origin.y, b.size.width, b.size.height);
+    moveLog("\n[move] '%s' -> display %u bounds (%.0f,%.0f) %.0fx%.0f\n",
+            appName.UTF8String, (unsigned)displayID,
+            b.origin.x, b.origin.y, b.size.width, b.size.height);
 
     AXUIElementRef appEl = AXUIElementCreateApplication(pid);
     if (!appEl) { if (errOut) *errOut = @"Couldn't access the app."; return NO; }
+
+    // Pick the window to move: the app's main window if it has one, else the
+    // first standard (titled, non-panel) window, else just the first window.
+    // (Moving a random auxiliary/panel window is a common reason move "fails".)
+    AXUIElementRef target = NULL;          // owned: CFRelease when done
+    AXUIElementRef mainWin = NULL;
+    if (AXUIElementCopyAttributeValue(appEl, kAXMainWindowAttribute,
+                                      (CFTypeRef*)&mainWin) == kAXErrorSuccess
+        && mainWin) {
+        target = mainWin;                  // already +1
+    }
     CFArrayRef windows = NULL;
     AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute, (CFTypeRef*)&windows);
-    CGPoint pos = b.origin;
-    CGSize  size = b.size;
+    CFIndex nwin = windows ? CFArrayGetCount(windows) : 0;
+    moveLog("  [move] app has %ld AX window(s); mainWindow=%s\n",
+            (long)nwin, target ? "yes" : "no");
+    for (CFIndex wi = 0; wi < nwin; ++wi) {
+        AXUIElementRef w = (AXUIElementRef)CFArrayGetValueAtIndex(windows, wi);
+        CFStringRef sub = NULL;
+        AXUIElementCopyAttributeValue(w, kAXSubroleAttribute, (CFTypeRef*)&sub);
+        char subbuf[64] = "?";
+        if (sub) CFStringGetCString(sub, subbuf, sizeof(subbuf), kCFStringEncodingUTF8);
+        CGPoint wp = axGetPoint(w, kAXPositionAttribute);
+        CGSize  ws = axGetSize(w, kAXSizeAttribute);
+        moveLog("    win %ld subrole=%s at (%.0f,%.0f) %.0fx%.0f\n",
+                (long)wi, subbuf, wp.x, wp.y, ws.width, ws.height);
+        if (!target && sub && CFEqual(sub, kAXStandardWindowSubrole))
+            target = (AXUIElementRef)CFRetain(w);
+        if (sub) CFRelease(sub);
+    }
+    if (!target && nwin > 0)
+        target = (AXUIElementRef)CFRetain(CFArrayGetValueAtIndex(windows, 0));
+
     BOOL moved = NO;
-    if (windows) {
-        for (CFIndex wi = 0; wi < CFArrayGetCount(windows); ++wi) {
-            AXUIElementRef win = (AXUIElementRef)CFArrayGetValueAtIndex(windows, wi);
-            AXUIElementSetAttributeValue(win, kAXMinimizedAttribute, kCFBooleanFalse);
+    BOOL hadWindow = (target != NULL);
+    if (target) {
+        CGPoint pre = axGetPoint(target, kAXPositionAttribute);
+        moveLog("  [move] chosen window pre-move at (%.0f,%.0f)\n", pre.x, pre.y);
+        AXUIElementSetAttributeValue(target, kAXMinimizedAttribute, kCFBooleanFalse);
+        AXUIElementPerformAction(target, kAXRaiseAction);
+        CGPoint pos = b.origin;
+        CGSize  size = b.size;
+        // Several passes with a settle between them: many apps (Chrome,
+        // Electron) apply an AX move asynchronously, so an immediate read-back
+        // catches the OLD position and looks like it "snapped back".
+        for (int pass = 0; pass < 4 && !moved; ++pass) {
             AXValueRef posV  = AXValueCreate(kAXValueTypeCGPoint, &pos);
             AXValueRef sizeV = AXValueCreate(kAXValueTypeCGSize,  &size);
-            AXUIElementSetAttributeValue(win, kAXPositionAttribute, posV);
-            AXUIElementSetAttributeValue(win, kAXSizeAttribute, sizeV);
-            AXUIElementSetAttributeValue(win, kAXPositionAttribute, posV); // re-pin
-            if (posV) CFRelease(posV);
+            AXUIElementSetAttributeValue(target, kAXPositionAttribute, posV);
+            AXUIElementSetAttributeValue(target, kAXSizeAttribute, sizeV);
+            AXUIElementSetAttributeValue(target, kAXPositionAttribute, posV);
+            if (posV)  CFRelease(posV);
             if (sizeV) CFRelease(sizeV);
-            // Read the position BACK to see if the move actually stuck.
-            AXValueRef gotV = NULL;
-            CGPoint got = {-99999, -99999};
-            if (AXUIElementCopyAttributeValue(win, kAXPositionAttribute,
-                                              (CFTypeRef*)&gotV) == kAXErrorSuccess && gotV) {
-                AXValueGetValue(gotV, kAXValueTypeCGPoint, &got);
-                CFRelease(gotV);
-            }
-            std::fprintf(stderr, "  [move] window %ld now at (%.0f,%.0f)\n",
-                         (long)wi, got.x, got.y);
-            if (std::abs(got.x - pos.x) < 50 && std::abs(got.y - pos.y) < 50) {
-                moved = YES; break;
-            }
+            [[NSRunLoop currentRunLoop]
+                runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
+            CGPoint got = axGetPoint(target, kAXPositionAttribute);
+            CGSize  gs  = axGetSize(target, kAXSizeAttribute);
+            CGPoint center = CGPointMake(got.x + gs.width * 0.5f,
+                                         got.y + gs.height * 0.5f);
+            BOOL inBounds = CGRectContainsPoint(b, center);
+            BOOL nearOrigin = std::abs(got.x - pos.x) < 100
+                           && std::abs(got.y - pos.y) < 100;
+            moveLog("  [move] pass %d: set (%.0f,%.0f) -> now (%.0f,%.0f) "
+                    "%.0fx%.0f center(%.0f,%.0f) inBounds=%d\n",
+                    pass, pos.x, pos.y, got.x, got.y, gs.width, gs.height,
+                    center.x, center.y, inBounds);
+            if (inBounds || nearOrigin) moved = YES;
         }
-        CFRelease(windows);
+        CFRelease(target);
+    } else if (errOut) {
+        *errOut = [NSString stringWithFormat:
+            @"“%@” has no movable window. Open a normal window and try again.",
+            appName];
     }
+    if (windows) CFRelease(windows);
     CFRelease(appEl);
-    if (!moved && errOut) *errOut = [NSString stringWithFormat:
-        @"“%@” wouldn't move onto the screen (the window snapped back). This is "
-        "a known limitation of macOS virtual displays — use the mirror mode "
-        "instead (turn the toggle off).", appName];
+    moveLog("  [move] verdict moved=%d\n", moved);
+    if (!moved && hadWindow && errOut) *errOut = [NSString stringWithFormat:
+        @"“%@” wouldn't move onto the screen (it snapped back). Make sure it has "
+        "a normal window — not full-screen (green button) — then try again.",
+        appName];
     return moved;
 }
 
