@@ -89,7 +89,8 @@
 @interface RNSControlPanel : NSObject <NSWindowDelegate>
 @property(nonatomic, strong) NSWindow* window;
 @property(nonatomic, strong) NSStackView* rootStack;
-@property(nonatomic, strong) NSMutableArray* targets; // retain block targets
+@property(nonatomic, strong) NSMutableArray* targets; // per-rebuild block targets (cleared on rebuild)
+@property(nonatomic, strong) NSMutableArray* persistentTargets; // top controls; survive rebuild
 @property(nonatomic, weak)   id<RNSControlActions> actions;
 @property(nonatomic, assign) rns::Scene scene;
 @property(nonatomic, assign) rns::ImuService* imu;
@@ -114,6 +115,7 @@
         _imu     = imu;
         _device  = device;
         _targets = [NSMutableArray array];
+        _persistentTargets = [NSMutableArray array];
         [self buildWindow];
         [self rebuild];
     }
@@ -135,15 +137,17 @@
     NSView* content = [[NSView alloc] initWithFrame:frame];
 
     // --- Mode switch: 2D plane editor (default) vs live 3D mirror -----------
+    // A checkbox, not an NSSegmentedControl — the segmented control's
+    // target/action wasn't firing here (the segment highlighted but the view
+    // never switched). Checkboxes/buttons use the proven block-target path.
     RNSBlockTarget* segT = [[RNSBlockTarget alloc] initWithBlock:^(id sender){
-        [self selectMode:[(NSSegmentedControl*)sender selectedSegment]];
+        BOOL on = ([(NSButton*)sender state] == NSControlStateValueOn);
+        [self selectMode:(on ? 1 : 0)];
     }];
-    [self.targets addObject:segT];
-    NSSegmentedControl* seg = [NSSegmentedControl
-        segmentedControlWithLabels:@[@"Plane editor", @"Live mirror"]
-                      trackingMode:NSSegmentSwitchTrackingSelectOne
-                            target:segT action:@selector(invoke:)];
-    seg.selectedSegment = 0;
+    [self.persistentTargets addObject:segT];
+    NSButton* seg = [NSButton checkboxWithTitle:@"Live mirror (off = plane editor)"
+                                         target:segT action:@selector(invoke:)];
+    seg.state = NSControlStateValueOff;
     seg.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:seg];
 
@@ -165,14 +169,19 @@
     RNSBlockTarget* followT = [[RNSBlockTarget alloc] initWithBlock:^(id sender){
         self.preview.followHead = ([(NSButton*)sender state] == NSControlStateValueOn);
     }];
-    [self.targets addObject:followT];
+    [self.persistentTargets addObject:followT];
     NSButton* followChk = [NSButton checkboxWithTitle:@"Follow head (mirror only)"
                                                target:followT action:@selector(invoke:)];
     followChk.state = NSControlStateValueOff;
     followChk.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:followChk];
 
-    NSButton* appsRefresh = [self button:@"↻ apps" block:^(id s){ [self buildAppsStrip]; }];
+    RNSBlockTarget* appsT = [[RNSBlockTarget alloc] initWithBlock:^(id s){
+        [self buildAppsStrip]; }];
+    [self.persistentTargets addObject:appsT];
+    NSButton* appsRefresh = [NSButton buttonWithTitle:@"↻ apps"
+                                               target:appsT action:@selector(invoke:)];
+    appsRefresh.bezelStyle = NSBezelStyleRounded;
     appsRefresh.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:appsRefresh];
 
