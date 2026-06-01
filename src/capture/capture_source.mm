@@ -94,15 +94,21 @@
 
 @interface RNSShareableContent : NSObject
 + (nullable SCShareableContent*)fetchSyncWithTimeout:(NSTimeInterval)timeout;
++ (nullable SCShareableContent*)fetchSyncWithTimeout:(NSTimeInterval)timeout
+                                        onScreenOnly:(BOOL)onScreenOnly;
 @end
 
 @implementation RNSShareableContent
 + (nullable SCShareableContent*)fetchSyncWithTimeout:(NSTimeInterval)timeout {
+    return [self fetchSyncWithTimeout:timeout onScreenOnly:YES];
+}
++ (nullable SCShareableContent*)fetchSyncWithTimeout:(NSTimeInterval)timeout
+                                        onScreenOnly:(BOOL)onScreenOnly {
     __block SCShareableContent* result = nil;
     __block NSError* err = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     [SCShareableContent getShareableContentExcludingDesktopWindows:NO
-                                               onScreenWindowsOnly:YES
+                                               onScreenWindowsOnly:onScreenOnly
                                                  completionHandler:^(SCShareableContent* c, NSError* e) {
         result = c;
         err = e;
@@ -302,8 +308,11 @@ CaptureSource makeAppWindowCapture(void* devicePtr,
     id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
     if (!device) return out;
 
+    // Include windows on ALL Spaces (not just the active one) so we still find
+    // the app when it's full-screen or on another desktop. Prefer on-screen
+    // windows but fall back to any matching window.
     SCShareableContent* content =
-        [RNSShareableContent fetchSyncWithTimeout:5.0];
+        [RNSShareableContent fetchSyncWithTimeout:5.0 onScreenOnly:NO];
     if (!content) return out;
 
     NSString* needle = [[NSString stringWithUTF8String:appNameSubstring.c_str()]
@@ -311,20 +320,27 @@ CaptureSource makeAppWindowCapture(void* devicePtr,
 
     SCWindow* best = nil;
     double bestArea = 0;
+    BOOL bestOnScreen = NO;
     for (SCWindow* w in content.windows) {
-        if (!w.onScreen) continue;
         if (w.frame.size.width < 100 || w.frame.size.height < 100) continue;
         NSString* appName = [w.owningApplication.applicationName lowercaseString];
         if (!appName || [appName rangeOfString:needle].location == NSNotFound)
             continue;
         double area = w.frame.size.width * w.frame.size.height;
-        if (area > bestArea) { bestArea = area; best = w; }
+        BOOL on = w.onScreen;
+        // Prefer on-screen; among equal on-screen-ness, prefer the larger window.
+        if (!best || (on && !bestOnScreen) ||
+            (on == bestOnScreen && area > bestArea)) {
+            best = w; bestArea = area; bestOnScreen = on;
+        }
     }
     if (!best) {
         std::fprintf(stderr, "  no window found for app '%s'\n",
                      appNameSubstring.c_str());
         return out;
     }
+    std::fprintf(stderr, "  app '%s' window onScreen=%d\n",
+                 appNameSubstring.c_str(), (int)bestOnScreen);
     std::fprintf(stderr, "  app '%s' -> '%s' %.0fx%.0f\n",
                  appNameSubstring.c_str(),
                  best.title.UTF8String ?: "",
