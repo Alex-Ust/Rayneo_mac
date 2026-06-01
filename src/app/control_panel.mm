@@ -190,6 +190,7 @@
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     self.rootStack = stack;
 
+    [content addSubview:scroll];
     NSClipView* clip = scroll.contentView;
     scroll.documentView = stack;
     [NSLayoutConstraint activateConstraints:@[
